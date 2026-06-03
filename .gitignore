@@ -1,0 +1,37 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+.bom-clima/
+*.db
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Coverage
+.coverage
+htmlcov/
+
+# Tox
+.tox/

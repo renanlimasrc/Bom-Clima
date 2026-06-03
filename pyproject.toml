@@ -1,0 +1,58 @@
+[project]
+name = "bom-clima"
+version = "0.2.0"
+description = "Bom Clima — beautiful CLI weather app using the Open-Meteo API"
+requires-python = ">=3.10"
+license = "GPL-2.0-or-later"
+readme = "README.md"
+authors = [
+    {name = "ninrod"},
+]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/renanlimasrc/Bom-Clima"
+Repository = "https://github.com/renanlimasrc/Bom-Clima.git"
+Issues = "https://github.com/renanlimasrc/Bom-Clima/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "types-requests>=2.28.0",
+]
+
+[project.scripts]
+bom-clima = "bom_clima.cli:main"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
