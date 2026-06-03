@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.2-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -38,7 +38,7 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 - **Smart file naming** — Automatic unique filenames when exporting multiple cities
 - **SQLite cache** — Speeds up repeated queries (geo: 7 days, weather: 30 minutes)
 - **Query history** — Track your recent weather searches (configurable limit)
-- **Persistent configuration** — Save defaults via `~/.bom-clima/config.json`
+- **Persistent configuration** — Save defaults via `~/.config/bom-clima/config.json`
 
 ### Configuration Options
 - **Default city** — Set a default city to query when none is provided
@@ -147,7 +147,7 @@ bom-clima "sao paulo,rio" --export json -o /tmp/weather
 
 ### Configuration
 ```bash
-# Set language (persists to ~/.bom-clima/lang)
+# Set language (persists to ~/.config/bom-clima/lang)
 bom-clima --lang en london
 
 # Set persistent configuration
@@ -200,11 +200,11 @@ Override with: `bom-clima --lang pt london`
 
 ## 📁 File Locations
 
-All app data is stored in `~/.bom-clima/`:
-- `config.json` — Persistent configuration (unit system, default city, forecast days, etc.)
-- `cache.db` — SQLite cache for geo and weather data
-- `history.json` — Query history (last 50 queries by default)
-- `lang` — Language preference file
+App data follows the XDG Base Directory Specification:
+- `~/.config/bom-clima/config.json` — Persistent configuration (unit system, default city, forecast days, etc.)
+- `~/.config/bom-clima/lang` — Language preference file
+- `~/.cache/bom-clima/cache.db` — SQLite cache for geo and weather data
+- `~/.local/share/bom-clima/history.json` — Query history (last 50 queries by default)
 
 ## 📝 Examples
 

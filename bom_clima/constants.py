@@ -1,5 +1,6 @@
 """Constants for the Bom Clima application."""
 
+import os
 from pathlib import Path
 
 BASE_URL_GEO = "https://geocoding-api.open-meteo.com/v1/search"
@@ -7,7 +8,7 @@ BASE_URL_WEATHER = "https://api.open-meteo.com/v1/forecast"
 BASE_URL_AIR = "https://air-quality-api.open-meteo.com/v1/air-quality"
 BASE_URL_ALERTS = "https://api.open-meteo.com/v1/warnings"
 IP_API_URL = "https://ipapi.co/json/"
-HEADERS = {"User-Agent": "BomClima/0.2"}
+HEADERS = {"User-Agent": "BomClima/0.2.1"}
 TIMEOUT = 10
 
 WMO_CODES = {
@@ -70,15 +71,20 @@ VALID_CONFIG_KEYS = {
     "color", "history_limit", "lang",
 }
 
-APP_DIR = Path.home() / ".bom-clima"
-CONFIG_FILE = APP_DIR / "config.json"
-CACHE_FILE = APP_DIR / "cache.db"
-HISTORY_FILE = APP_DIR / "history.json"
-LANG_FILE = APP_DIR / "lang"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bom-clima"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bom-clima"
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "bom-clima"
+
+CONFIG_FILE = CONFIG_DIR / "config.json"
+LANG_FILE = CONFIG_DIR / "lang"
+CACHE_FILE = CACHE_DIR / "cache.db"
+HISTORY_FILE = DATA_DIR / "history.json"
 
 
 def ensure_app_dir() -> None:
-    APP_DIR.mkdir(exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 CACHE_TTL_GEO = 86400 * 7

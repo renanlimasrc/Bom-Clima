@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.2.0
+- **Version**: 0.2.1
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.2.0"
+│   ├── __init__.py           # Package init, __version__ = "0.2.1"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)
@@ -104,7 +104,7 @@ Two tables: `geo_cache` and `weather_cache`. Each row has `query/key`, `data` (J
 
 ### `config.py` — Configuration (31 lines)
 
-Manages persistent config at `~/.bom-clima/config.json`.
+Manages persistent config at `~/.config/bom-clima/config.json`.
 
 **Default config:**
 ```python
@@ -186,7 +186,7 @@ Data formatting and export utilities.
 
 ### `history.py` — Query History (35 lines)
 
-Simple JSON-based history at `~/.bom-clima/history.json`.
+Simple JSON-based history at `~/.local/share/bom-clima/history.json`.
 
 **Key functions:**
 - `load_history() → list[dict]` — Load history from file
@@ -198,7 +198,7 @@ Simple JSON-based history at `~/.bom-clima/history.json`.
 Loads translations from `bom_clima/locales/{lang}.json` files.
 
 **Language detection order:**
-1. `~/.bom-clima/lang` file (persisted via `--lang` flag)
+1. `~/.config/bom-clima/lang` file (persisted via `--lang` flag)
 2. `$LANG` environment variable
 3. `locale.getlocale()` system locale
 4. Windows `GetUserDefaultUILanguage()` API
@@ -218,7 +218,7 @@ Loads translations from `bom_clima/locales/{lang}.json` files.
 User runs: bom-clima "sao paulo" --aqi --days 7
 
 1. cli.main()
-   ├── ensure_app_dir() → mkdir ~/.bom-clima/
+   ├── ensure_app_dir() → mkdir ~/.config/bom-clima/, ~/.cache/bom-clima/, ~/.local/share/bom-clima/
    ├── build_parser() → parse args
    ├── load_config() + apply_config_overrides()
    ├── cities = ["sao paulo"]
@@ -251,14 +251,14 @@ User runs: bom-clima "sao paulo" --aqi --days 7
 
 ## File Locations
 
-All app data is stored in `~/.bom-clima/`:
+All app data follows the XDG Base Directory Specification:
 
-| File | Purpose |
-|------|---------|
-| `config.json` | Persistent configuration |
-| `cache.db` | SQLite cache (geo + weather) |
-| `history.json` | Query history |
-| `lang` | Language preference |
+| File | Path | Purpose |
+|------|------|---------|
+| `config.json` | `~/.config/bom-clima/` | Persistent configuration |
+| `lang` | `~/.config/bom-clima/` | Language preference |
+| `cache.db` | `~/.cache/bom-clima/` | SQLite cache (geo + weather) |
+| `history.json` | `~/.local/share/bom-clima/` | Query history |
 
 ## Testing
 
