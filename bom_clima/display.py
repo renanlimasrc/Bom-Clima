@@ -17,7 +17,6 @@ from .formatters import (
     get_weekday_name,
     get_wmo,
     moon_phase_name,
-    rain_window_summary,
     wind_arrow,
     wind_direction,
 )
@@ -350,13 +349,6 @@ def display_weather(
         r_print("")
 
     recs = generate_recommendations(dados, cfg)
-    rain_summary = rain_window_summary(dados)
-    rain_now = dados.get("current", {}).get("rain", 0)
-
-    if rain_summary:
-        recs.append(f"\U0001f327\ufe0f {t('rain_window')}: {', '.join(rain_summary)}")
-    elif not rain_now:
-        recs.append(f"\u2705 {t('no_rain_expected')}")
 
     if recs:
         rec_rows = [[r] for r in recs]

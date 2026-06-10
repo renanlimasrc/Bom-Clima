@@ -1,6 +1,6 @@
 [project]
 name = "bom-clima"
-version = "0.2.1"
+version = "0.2.2"
 description = "Bom Clima — beautiful CLI weather app using the Open-Meteo API"
 requires-python = ">=3.10"
 license = "GPL-2.0-or-later"
