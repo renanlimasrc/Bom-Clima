@@ -24,6 +24,9 @@ Thumbs.db
 # IDE settings
 .idea/
 .vscode/
+.opencode/
+.kilo/
+.mimocode/
 
 # Logs
 *.log

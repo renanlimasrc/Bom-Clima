@@ -213,7 +213,7 @@ App data follows the XDG Base Directory Specification:
 $ bom-clima sao paulo
 ```
 ```
-╭──────────── Bom Clima atual em São paulo ────────────╮
+╭──────────── Clima atual em São paulo ────────────╮
 │ São Paulo, São Paulo, Brasil                     │
 │ Atualizado:              10:45 (30/04/2026)     │
 │ Principalmente limpo                             │
