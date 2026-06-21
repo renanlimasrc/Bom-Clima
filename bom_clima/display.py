@@ -331,29 +331,23 @@ def display_weather(
         r_table(forecast_headers, forecast_rows, title=t("forecast_days").format(n=days))
 
     alerts = dados.get("alerts", [])
-    if alerts:
-        r_rule(f"\u26a0\ufe0f {t('alerts')}")
+    extremes = detect_extremes(dados)
+    recs = generate_recommendations(dados, cfg)
+
+    if alerts or extremes or recs:
+        parts: list[str] = []
         for alert in alerts:
             alert_lines = [
                 f"\U0001f534 {alert.get('event', t('alert_event'))}",
                 f"\U0001f4dd {alert.get('description', '')}",
                 f"\U0001f550 {t('alert_from')}: {alert.get('start', '')} {t('alert_until')}: {alert.get('end', '')}",
             ]
-            r_panel("\n".join(alert_lines))
-
-    extremes = detect_extremes(dados)
-    if extremes:
-        r_rule(f"\U0001f6a8 {t('alerts')}")
+            parts.append("\n".join(alert_lines))
         for ext in extremes:
-            r_print(f"  \u26a0\ufe0f  {ext}")
-        r_print("")
-
-    recs = generate_recommendations(dados, cfg)
-
-    if recs:
-        rec_rows = [[r] for r in recs]
-        r_table([""], rec_rows, title=t("recommendations"), show_header=False)
-        r_print("")
+            parts.append(f"\u26a0\ufe0f  {ext}")
+        for rec in recs:
+            parts.append(f"\u2714\ufe0f  {rec}")
+        r_panel("\n\n".join(parts), title=f" {t('alerts_and_recs')} ")
 
 
 def display_comparison(

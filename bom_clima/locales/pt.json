@@ -143,6 +143,7 @@
     "pressure_unit": "hPa",
     "visibility_unit": "km",
     "recommendations": "Recomendações",
+    "alerts_and_recs": "Alertas e recomendações",
     "rec_umbrella": "Leve guarda-chuva (chuva esperada)",
     "rec_sunscreen": "Use protetor solar (UV {uv})",
     "rec_jacket": "Leve um casaco (sensação de frio)",
