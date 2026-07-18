@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 PKGNAME="bom-clima"
-VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+VERSION="$(/usr/bin/python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
 DIST_DIR="$PROJECT_ROOT/dist"
 BUILD_DIR="$PROJECT_ROOT/build/arch"
 
@@ -47,12 +47,12 @@ sha256sums=('$SHA256')
 
 build() {
     cd "${PKGNAME}-\${pkgver}"
-    python -m build --wheel --no-isolation
+    /usr/bin/python -m build --wheel --no-isolation
 }
 
 package() {
     cd "${PKGNAME}-\${pkgver}"
-    python -m installer --destdir="\${pkgdir}" dist/*.whl
+    /usr/bin/python -m installer --destdir="\${pkgdir}" dist/*.whl
 }
 PKGEOF
 
