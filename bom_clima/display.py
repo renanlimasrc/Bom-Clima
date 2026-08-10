@@ -167,7 +167,6 @@ def format_weather_block(
     entries.append(("", t("updated"), updated_display))
     entries.append(("", wmo_desc, ""))
 
-    entries.append(("", "", ""))
     entries.append(("", t("temperature"), f"{atual['temperature_2m']}{unit_sym}"))
     entries.append(("", t("feels_like"), f"{atual['apparent_temperature']}{unit_sym}"))
     entries.append(("", t("max_today"), f"{diario['temperature_2m_max'][0]}{unit_sym}"))
@@ -180,7 +179,6 @@ def format_weather_block(
     if bar_line:
         entries.append(("  ", "", bar_line))
 
-    entries.append(("", "", ""))
     entries.append(("", t("humidity"), f"{atual['relative_humidity_2m']}%"))
     dir_name = wind_direction(atual["wind_direction_10m"])
     arrow = wind_arrow(atual["wind_direction_10m"])
@@ -202,19 +200,15 @@ def format_weather_block(
     if vis is not None:
         entries.append(("", t("visibility_label"), f"{vis / 1000:.1f} {t('visibility_unit')}"))
 
-    entries.append(("", "", ""))
     entries.append(("", t("rain_now"), f"{atual.get('rain', 0)} {precip_unit}"))
     entries.append(("", t("rain_chance"), f"{diario['precipitation_probability_max'][0]}%"))
     entries.append(("", t("total_precip"), f"{diario['precipitation_sum'][0]} {precip_unit}"))
     entries.append(("", t("rain_hours"), f"{diario['precipitation_hours'][0]} h"))
 
-    entries.append(("", "", ""))
     entries.append(("", t("sunrise"), format_timestamp(diario["sunrise"][0]) + format_time_remaining(diario["sunrise"][0])))
     entries.append(("", t("sunset"), format_timestamp(diario["sunset"][0]) + format_time_remaining(diario["sunset"][0])))
     entries.append(("", t("day_length"), format_duration(diario["daylight_duration"][0])))
     entries.append(("", t("uv_index"), str(atual.get("uv_index", "N/A"))))
-
-    entries.append(("", "", ""))
 
     aqi_data = dados.get("air_quality", {})
     if aqi_data:
@@ -232,9 +226,6 @@ def format_weather_block(
     lines: list[str] = []
     sep_lines: list[tuple[str, str]] = []
     for emoji, label, value in entries:
-        if not emoji and not label and not value:
-            sep_lines.append(("", ""))
-            continue
         if emoji == "  " and not label and value:
             lines.append(value)
             continue
@@ -249,9 +240,6 @@ def format_weather_block(
     max_label = max((display_width(lbl) for lbl, _ in sep_lines if lbl and lbl.strip()), default=0)
 
     for label, value in sep_lines:
-        if not label and not value:
-            lines.append("")
-            continue
         if value:
             pad = max_label - display_width(label)
             lines.append(f"{label}{' ' * pad} {value}")
@@ -347,7 +335,7 @@ def display_weather(
             parts.append(f"\u26a0\ufe0f  {ext}")
         for rec in recs:
             parts.append(f"\u2714\ufe0f  {rec}")
-        r_panel("\n\n".join(parts), title=f" {t('alerts_and_recs')} ")
+        r_panel("\n".join(parts), title=f" {t('alerts_and_recs')} ")
 
 
 def display_comparison(
