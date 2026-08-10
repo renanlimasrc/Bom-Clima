@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-10
+
+### Changed
+- Query history (`--history`, `-y`) rendered as a panel card consistent with the other cards
+
 ## [0.2.6] - 2026-08-10
 
 ### Added

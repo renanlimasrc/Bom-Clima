@@ -18,7 +18,6 @@ from .display import (
     display_weather,
     r_panel,
     r_print,
-    r_rule,
 )
 from .formatters import export_all_formats, score_days
 from .history import add_history, load_history
@@ -146,7 +145,6 @@ def show_history() -> None:
     if not history:
         r_print(f"\U0001f4ed {t('no_history')}")
         return
-    r_rule(t("history_title"))
     headers = ["#", t("hist_city"), t("hist_lat"), t("hist_lon"), t("hist_when")]
     rows: list[list[str]] = []
     for idx, entry in enumerate(reversed(history), 1):
@@ -158,8 +156,7 @@ def show_history() -> None:
             entry["when"][:16],
         ])
     from .display import r_table
-    r_table(headers, rows)
-    r_print("")
+    r_table(headers, rows, title=t("history_title"))
 
 
 def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
