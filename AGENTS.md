@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.2.5
+- **Version**: 0.2.6
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.2.4"
+│   ├── __init__.py           # Package init, __version__ = "0.2.6"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)
@@ -43,7 +43,7 @@ Bom-Clima/
 │       ├── pt.json
 │       └── es.json
 ├── tests/
-│   └── test_bom_clima.py     # 100 unit tests
+│   └── test_bom_clima.py     # 492 unit tests
 ├── pyproject.toml            # Project metadata, tool config
 ├── requirements.txt          # Runtime dependencies
 ├── .gitignore
@@ -53,23 +53,22 @@ Bom-Clima/
 
 ## Module Reference
 
-### `cli.py` — CLI Entry Point (427 lines)
+### `cli.py` — CLI Entry Point
 
 The main orchestrator. Handles argument parsing, config loading, and dispatches to the appropriate mode.
 
 **Key functions:**
 - `build_parser()` → `argparse.ArgumentParser` — Constructs CLI argument parser
-- `main()` — Entry point: parses args, loads config, dispatches to single/compare/watch/detect mode
-- `watch_mode(cidade, cfg, interval, args)` — Auto-refresh loop with dynamic intervals
+- `main()` — Entry point: parses args, loads config, dispatches to single/compare/detect mode
 - `apply_config_overrides(cfg, args)` — Merges CLI flags into config dict
-- `_calc_dynamic_interval(dados, base_interval)` — Adjusts watch interval based on rain probability
 - `_fetch_and_display(city, cfg, args)` — Fetches weather data for a single city
 - `_export_city_data(dados, nome, export_fmt, output)` — Export with unique filenames for multi-city
+- `_show_vs_yesterday(dados)` — Renders temperature comparison with yesterday in a panel card
 
 **CLI argument groups:**
 - **Search**: `city`, `--detect`, `--compare`
 - **Display**: `--days`, `--hours`, `--alerts`, `--aqi`, `--imperial`, `--no-color`
-- **Modes**: `--watch SEC`, `--history`, `--no-cache`, `--verbose`
+- **Modes**: `--history`, `--no-cache`, `--verbose`
 - **Smart**: `--best-day`, `--vs-yesterday`
 - **Export**: `--export FMT`, `--output FILE`
 - **Config**: `--lang`, `--config-set K=V`, `--config-show`
@@ -138,28 +137,33 @@ All static data lives here:
 - **EXTREME_*** — Thresholds for extreme weather detection (heat >35°C, cold <0°C, wind >50km/h, rain >30mm, UV >8, CAPE >1500)
 - **DAY_SCORE_IDEAL_TEMP** — Ideal temperature (22°C) for day scoring
 
-### `display.py` — Display Rendering (373 lines)
+### `display.py` — Display Rendering (418 lines)
 
 Handles both Rich and plain text output. Auto-detects Rich availability.
 
 **Visual features:**
-- Temperature color coding via `_temp_color(val, unit_sym)` — blue (<10°C), cyan (10-18°C), green (18-28°C), yellow (28-35°C), red (>35°C)
+- Temperature color coding via `_temp_color(val, unit_sym)` — blue (<10°C), cyan (10-18°C), green (18-28°C), yellow (28-35°C), red (≥35°C); imperial (°F) values are normalized to °C before comparing thresholds
 - Rain probability color coding via `_rain_color(val)` — green (<20%), yellow (20-60%), red (>60%)
 - Temperature bar via `_build_temp_bar(temp, t_min, t_max, unit_sym)` — shows current position between daily min/max
 - Unicode wind direction arrows (↑, ↗, →, ↘, ↓, ↙, ←, ↖) — from `formatters.wind_arrow()`
-- Alternating row styles (`row_styles = ["", "dim"]`) in Rich tables
+- Alternating row styles (`row_styles = ["", "dim"]`) in Rich tables (only when colors are active)
 - Section separators (empty lines) between logical groups in weather block
+- No-color mode renders the same Rich cards in monochrome (`console.no_color`) with zero ANSI codes
 
 **Key functions:**
 - `r_print(text)` — Print with Rich or fallback to print()
 - `r_rule(title)` — Horizontal rule separator
 - `r_panel(content, title)` — Panel/box display
 - `r_table(headers, rows, title)` — Table display
+- `display_best_day(headers, rows, title)` — Centered best-day score card (fixed width, centered columns)
+- `_table_lines(headers, rows, ...)` — Plain-text table rows with optional fill/center
+- `_use_rich()` / `_colors_active()` — Structure vs. color markup toggles
+- `_set_colors_enabled(enabled)` — Syncs `_COLORS_ENABLED` and the Rich console color state
 - `format_weather_block(nome, dados, cfg, city_info)` → str — Builds the main weather info block
 - `display_weather(nome, dados, cfg, ...)` — Renders full weather output (panel + hourly + forecast + alerts)
 - `display_comparison(cidades_dados)` — Side-by-side city comparison using Rich Columns
 
-**Rich availability**: Checked via `HAS_RICH` global. If `rich` is not installed, all display functions fall back to plain text.
+**Rich availability**: Checked via `HAS_RICH` global. If `rich` is not installed, all display functions fall back to plain text. With colors disabled (`--no-color`), Rich still renders the card structure but fully monochrome.
 
 ### `formatters.py` — Formatters & Export (385 lines)
 
@@ -262,7 +266,7 @@ All app data follows the XDG Base Directory Specification:
 
 ## Testing
 
-**Location**: `tests/test_bom_clima.py` (781 lines, 100 tests)
+**Location**: `tests/test_bom_clima.py` (1042 lines, 492 tests)
 
 **Test classes:**
 - `TestWindDirection` — Compass direction conversion
@@ -279,7 +283,6 @@ All app data follows the XDG Base Directory Specification:
 - `TestCLIArguments` — Argument parsing
 - `TestDisplayWidth` — Unicode display width
 - `TestDocumentsDir` — Documents directory detection
-- `TestCalcDynamicInterval` — Dynamic watch interval logic
 - `TestValidatePositive` — Input validation
 - `TestGetAqiLabel` — AQI classification
 - `TestGetWeekdayName` — Weekday translation
@@ -293,6 +296,10 @@ All app data follows the XDG Base Directory Specification:
 - `TestDetectExtremes` — Extreme weather detection
 - `TestRainWindowSummary` — Rain scheduling analysis
 - `TestScoreDays` — Day scoring for outdoor activities
+- `TestArgumentParsingCombinations` — All pairwise CLI arg parsing combinations
+- `TestArgumentMainCombinations` — All pairwise CLI arg integration tests
+- `TestTempColor` — Temperature color thresholds (metric and imperial)
+- `TestNoColorMarkup` — Color markup suppression when colors are disabled
 
 **Key fixtures:**
 - `mock_lang_for_tests` (autouse) — Forces English locale
@@ -331,6 +338,6 @@ python bom-clima.py sao paulo
 - **Imports**: Relative imports within package (e.g., `from .constants import ...`)
 - **Error handling**: `ValueError` for user-facing errors, `requests.RequestException` for API errors
 - **Translations**: All user-facing strings go through `t(key)` function
-- **Rich fallback**: All display functions check `HAS_RICH` and fall back to plain text
+- **Rich fallback**: Display functions use Rich when installed; with colors disabled they still render the card structure in monochrome (zero ANSI codes)
 - **Cache keys**: Weather cache uses `"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{forecast_days}"`
 - **Type annotations**: `json.loads()` returns require explicit `dict` or `list[dict]` type annotations to satisfy mypy

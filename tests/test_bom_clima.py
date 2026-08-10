@@ -31,7 +31,7 @@ from bom_clima.cache import (
     cache_set_geo,
     cache_set_weather,
 )
-from bom_clima.cli import _calc_dynamic_interval, _validate_positive, apply_config_overrides, build_parser
+from bom_clima.cli import _validate_positive, apply_config_overrides, build_parser
 from bom_clima.config import load_config
 from bom_clima.constants import VALID_CONFIG_KEYS, WMO_CODES
 from bom_clima.display import format_weather_block
@@ -366,6 +366,39 @@ class TestConfig:
         assert "city_default" in VALID_CONFIG_KEYS
         assert "forecast_days" in VALID_CONFIG_KEYS
 
+    def test_config_show_renders_panel(self):
+        from bom_clima import cli as cli_mod
+        cfg = {"unit_system": "metric", "color": True}
+        args = type("Args", (), {
+            "imperial": False, "hours": None, "days": None,
+            "no_color": False, "config_set": None, "config_show": True,
+            "lang": None, "no_cache": False, "verbose": False,
+        })()
+        with patch.object(cli_mod, "r_panel") as mock_panel, \
+             pytest.raises(SystemExit):
+            cli_mod.apply_config_overrides(cfg, args)
+        mock_panel.assert_called_once()
+        content, kwargs = mock_panel.call_args.args[0], mock_panel.call_args.kwargs
+        assert "unit_system:" in content
+        assert "metric" in content
+        assert "color:" in content
+        assert "True" in content
+        assert kwargs["title"] == "Configuration"
+
+    def test_config_show_syncs_colors(self):
+        from bom_clima import cli as cli_mod
+        cfg = {"unit_system": "metric", "color": True}
+        args = type("Args", (), {
+            "imperial": False, "hours": None, "days": None,
+            "no_color": False, "config_set": None, "config_show": True,
+            "lang": None, "no_cache": False, "verbose": False,
+        })()
+        with patch.object(cli_mod, "_set_colors_enabled") as mock_set, \
+             patch.object(cli_mod, "r_panel"), \
+             pytest.raises(SystemExit):
+            cli_mod.apply_config_overrides(cfg, args)
+        mock_set.assert_called_once_with(True)
+
 
 class TestMoonPhase:
     def test_moon_phase_returns_valid_index(self):
@@ -425,6 +458,93 @@ class TestFormatWeatherBlock:
         block = format_weather_block("Sao Paulo", mock_weather_with_aqi, cfg)
         assert "Air Quality Index" in block
         assert "45" in block
+
+
+class TestTempColor:
+    @staticmethod
+    def _temp_color(val, unit_sym):
+        from bom_clima.display import HAS_RICH, _temp_color
+        if not HAS_RICH:
+            pytest.skip("rich not installed")
+        return _temp_color(val, unit_sym)
+
+    def test_metric_red_at_36(self):
+        assert "[red]" in self._temp_color(36, "°C")
+
+    def test_metric_green_mid(self):
+        assert "[green]" in self._temp_color(25.5, "°C")
+
+    def test_imperial_red_only_at_95(self):
+        assert "[red]" in self._temp_color(95.0, "°F")
+
+    def test_imperial_not_red_below_95(self):
+        out = self._temp_color(94.9, "°F")
+        assert "[red]" not in out
+        assert "[yellow]" in out
+
+    def test_imperial_low_temp_not_red(self):
+        out = self._temp_color(56.9, "°F")
+        assert "[red]" not in out
+        assert "[cyan]" in out
+
+    def test_imperial_yellow_range(self):
+        assert "[yellow]" in self._temp_color(90.0, "°F")
+
+    def test_imperial_green_range(self):
+        assert "[green]" in self._temp_color(68.0, "°F")
+
+    def test_imperial_cyan_range(self):
+        assert "[cyan]" in self._temp_color(54.0, "°F")
+
+    def test_imperial_blue_range(self):
+        assert "[blue]" in self._temp_color(45.0, "°F")
+
+
+class TestNoColorMarkup:
+    @staticmethod
+    def _set_colors(enabled):
+        import bom_clima.display as d
+        if not d.HAS_RICH:
+            pytest.skip("rich not installed")
+        old = d._COLORS_ENABLED
+        d._COLORS_ENABLED = enabled
+        return d, old
+
+    def test_no_markup_when_colors_disabled(self):
+        d, old = self._set_colors(False)
+        try:
+            assert d._temp_color(36, "°C") == "36°C"
+            assert d._rain_color(70) == "70%"
+        finally:
+            d._COLORS_ENABLED = old
+
+    def test_markup_when_colors_enabled(self):
+        d, old = self._set_colors(True)
+        try:
+            assert d._temp_color(36, "°C") == "[red]36°C[/red]"
+            assert d._rain_color(70) == "[red]70%[/red]"
+        finally:
+            d._COLORS_ENABLED = old
+
+    def test_use_rich_kept_when_colors_disabled(self):
+        d, old = self._set_colors(False)
+        try:
+            assert d._use_rich() is True
+        finally:
+            d._COLORS_ENABLED = old
+
+    def test_set_colors_toggles_no_color(self):
+        d, old = self._set_colors(True)
+        try:
+            d._set_colors_enabled(False)
+            assert d.console is not None
+            assert d.console.no_color is True
+            d._set_colors_enabled(True)
+            assert d.console.no_color is None
+        finally:
+            d._COLORS_ENABLED = old
+            if d.console is not None:
+                d.console.no_color = None
 
 
 class TestI18n:
@@ -518,32 +638,6 @@ class TestDocumentsDir:
     def test_fallback_documents_dir(self):
         result = _get_documents_dir()
         assert isinstance(result, Path)
-
-
-class TestCalcDynamicInterval:
-    def test_no_hourly_data(self):
-        dados = {"hourly": {}}
-        assert _calc_dynamic_interval(dados, 60) == 60
-
-    def test_high_rain_probability(self):
-        dados = {
-            "hourly": {
-                "time": ["2026-04-29T15:00", "2026-04-29T16:00"],
-                "precipitation_probability": [80, 75],
-            }
-        }
-        result = _calc_dynamic_interval(dados, 60)
-        assert result <= 60
-
-    def test_moderate_rain_probability(self):
-        dados = {
-            "hourly": {
-                "time": ["2026-04-29T15:00", "2026-04-29T16:00"],
-                "precipitation_probability": [50, 45],
-            }
-        }
-        result = _calc_dynamic_interval(dados, 60)
-        assert 45 <= result <= 60
 
 
 class TestValidatePositive:
@@ -779,3 +873,170 @@ class TestScoreDays:
         good_score = score_days(good)[0][1]
         bad_score = score_days(bad)[0][1]
         assert good_score > bad_score
+
+
+# ---------------------------------------------------------------------------
+# Argument Combination Tests
+# ---------------------------------------------------------------------------
+
+import argparse
+
+ALL_BOOLEAN_FLAGS = [
+    "--detect", "--compare", "--alerts", "--aqi", "--imperial",
+    "--no-color", "--history", "--no-cache", "--verbose",
+    "--best-day", "--vs-yesterday", "--config-show", "--help", "--version",
+]
+
+ALL_VALUE_ARGS = [
+    ("--days", "5"),
+    ("--hours", "12"),
+    ("--export", "json"),
+    ("--output", "/tmp/test_output.json"),
+    ("--lang", "en"),
+    ("--config-set", "color=false"),
+]
+
+
+def _build_all_pairs():
+    all_args = []
+    for flag in ALL_BOOLEAN_FLAGS:
+        all_args.append((flag,))
+    for flag, val in ALL_VALUE_ARGS:
+        all_args.append((flag, val))
+    pairs = []
+    for i in range(len(all_args)):
+        for j in range(i + 1, len(all_args)):
+            combo = list(all_args[i]) + list(all_args[j])
+            pairs.append(combo)
+    return pairs
+
+
+def _combo_id(args):
+    return "+".join(a.lstrip("-").replace("-", "_") for a in args)
+
+
+_FAKE_WEATHER = {
+    "current": {
+        "time": "2026-04-29T14:00", "temperature_2m": 25.5,
+        "apparent_temperature": 27.0, "relative_humidity_2m": 65,
+        "wind_speed_10m": 15, "wind_direction_10m": 180,
+        "wind_gusts_10m": 25, "weather_code": 1, "rain": 0,
+        "uv_index": 5.2, "pressure_msl": 1013, "visibility": 10000,
+        "dew_point_2m": 18, "cloud_cover": 40,
+    },
+    "daily": {
+        "time": ["2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01"],
+        "temperature_2m_max": [24.0, 28.0, 27.0, 26.0],
+        "temperature_2m_min": [14.0, 18.0, 17.0, 16.0],
+        "sunrise": ["2026-04-28T06:29", "2026-04-29T06:30", "2026-04-30T06:31", "2026-05-01T06:32"],
+        "sunset": ["2026-04-28T18:01", "2026-04-29T18:00", "2026-04-30T17:59", "2026-05-01T17:58"],
+        "daylight_duration": [41500, 41400, 41300, 41200],
+        "precipitation_probability_max": [5, 10, 20, 30],
+        "precipitation_sum": [0, 0, 1.2, 5.0],
+        "precipitation_hours": [0, 0, 2, 4],
+        "weather_code": [0, 1, 3, 61],
+        "wind_speed_10m_max": [15, 20, 25, 30],
+        "wind_direction_10m_dominant": [170, 180, 190, 200],
+        "sunshine_duration": [32000, 30000, 28000, 25000],
+        "uv_index_max": [6, 7, 6, 5],
+    },
+    "hourly": {
+        "time": ["2026-04-29T15:00", "2026-04-29T16:00", "2026-04-29T17:00"],
+        "temperature_2m": [26.0, 25.5, 24.0],
+        "apparent_temperature": [27.5, 26.0, 25.0],
+        "rain": [0, 0, 0.5],
+        "relative_humidity_2m": [60, 62, 65],
+        "precipitation_probability": [5, 10, 40],
+        "wind_speed_10m": [14, 13, 12],
+        "cloud_cover": [30, 40, 50],
+        "weather_code": [1, 2, 61],
+        "uv_index": [5, 4, 3],
+        "is_day": [1, 1, 1],
+        "cape": [100, 150, 200],
+    },
+}
+
+_FAKE_GEO = {
+    "name": "Sao Paulo", "latitude": -23.55, "longitude": -46.63,
+    "admin1": "Sao Paulo", "country": "Brazil",
+}
+
+_FAKE_DETECT = {
+    "lat": -23.55, "lon": -46.63,
+    "city": "Sao Paulo", "country": "Brazil",
+}
+
+_FAKE_AQI = {
+    "current": {"us_aqi": 45, "pm2_5": 10.2, "pm10": 15.0, "nitrogen_dioxide": 8.0},
+}
+
+_FAKE_ALERTS = {
+    "alerts": [],
+}
+
+
+class TestArgumentParsingCombinations:
+    """Ensure build_parser().parse_args() accepts all pairwise arg combinations."""
+
+    @pytest.mark.parametrize(
+        "combo", _build_all_pairs(),
+        ids=[_combo_id(c) for c in _build_all_pairs()],
+    )
+    def test_parse_args_pair(self, combo):
+        parser = build_parser()
+        ns = parser.parse_args(["sao paulo"] + combo)
+        assert isinstance(ns, argparse.Namespace)
+
+
+class TestArgumentMainCombinations:
+    """Ensure main() does not crash on any pairwise arg combination."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_main_mocks(self, tmp_path):
+        cache_file = tmp_path / "cache.db"
+        config_file = tmp_path / "config.json"
+        history_file = tmp_path / "history.json"
+
+        def _mock_requests_get(url, **kwargs):
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            url_str = str(url)
+            if "geocoding" in url_str:
+                resp.json.return_value = {"results": [_FAKE_GEO]}
+            elif "air-quality" in url_str:
+                resp.json.return_value = _FAKE_AQI
+            elif "warnings" in url_str:
+                resp.json.return_value = _FAKE_ALERTS
+            else:
+                resp.json.return_value = _FAKE_WEATHER
+            return resp
+
+        patches = [
+            patch("bom_clima.api.requests.get", side_effect=_mock_requests_get),
+            patch("bom_clima.cli.detect_location", return_value=_FAKE_DETECT),
+            patch("builtins.input", return_value="sao paulo"),
+            patch("bom_clima.cache.CACHE_FILE", cache_file),
+            patch("bom_clima.config.CONFIG_FILE", config_file),
+            patch("bom_clima.history.HISTORY_FILE", history_file),
+            patch("bom_clima.constants.CONFIG_DIR", tmp_path / "cfg"),
+            patch("bom_clima.constants.CACHE_DIR", tmp_path / "cache"),
+            patch("bom_clima.constants.DATA_DIR", tmp_path / "data"),
+        ]
+        for p in patches:
+            p.start()
+        yield
+        for p in patches:
+            p.stop()
+
+    @pytest.mark.parametrize(
+        "combo", _build_all_pairs(),
+        ids=[_combo_id(c) for c in _build_all_pairs()],
+    )
+    def test_main_combo(self, combo):
+        sys_args = ["bom-clima", "sao paulo"] + combo
+        with patch("sys.argv", sys_args):
+            try:
+                from bom_clima.cli import main
+                main()
+            except SystemExit:
+                pass

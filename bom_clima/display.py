@@ -38,7 +38,22 @@ _COLORS_ENABLED = True
 
 
 def _use_rich() -> bool:
+    return HAS_RICH
+
+
+def _colors_active() -> bool:
     return HAS_RICH and _COLORS_ENABLED
+
+
+def _style_if_active(style: str) -> str | None:
+    return style if _colors_active() else None
+
+
+def _set_colors_enabled(enabled: bool) -> None:
+    global _COLORS_ENABLED
+    _COLORS_ENABLED = enabled
+    if console is not None:
+        console.no_color = None if enabled else True
 
 
 def r_print(text_str: str) -> None:
@@ -52,7 +67,7 @@ def r_print(text_str: str) -> None:
 def r_rule(title: str, char: str = "=") -> None:
     if _use_rich():
         assert console is not None
-        console.rule(f" {title} ", style="bold blue", characters=char)
+        console.rule(f" {title} ", style=_style_if_active("bold blue"), characters=char)
     else:
         sep = char * 44
         print(f"\n{sep}")
@@ -71,13 +86,40 @@ def r_panel(content: str, title: str = "") -> None:
 
 
 def _build_rich_table(headers: list[str], rows: list[list[str]], show_header: bool = True) -> "Table":
-    table = Table(show_header=show_header, header_style="bold cyan", show_edge=False)
-    table.row_styles = ["", "dim"]
+    table = Table(show_header=show_header, header_style=_style_if_active("bold cyan"), show_edge=False)
+    table.row_styles = ["", "dim"] if _colors_active() else ["", ""]
     for h in headers:
         table.add_column(h)
     for row in rows:
         table.add_row(*row)
     return table
+
+
+def _table_lines(
+    headers: list[str],
+    rows: list[list[str]],
+    show_header: bool = True,
+    total_width: int | None = None,
+    center: bool = False,
+) -> list[str]:
+    col_w = [max(len(str(r[i])) if i < len(r) else 0 for r in rows) for i in range(len(headers))]
+    col_w = [max(col_w[i], len(headers[i])) for i in range(len(headers))]
+    if total_width is not None:
+        diff = total_width - sum(col_w) - 2 * (len(headers) - 1)
+        if diff > 0:
+            total = sum(col_w)
+            extra = [int(diff * w / total) for w in col_w]
+            extra[-1] += diff - sum(extra)
+            col_w = [c + e for c, e in zip(col_w, extra)]
+    fmt = "  ".join(f"{{:^{w}}}" if center else f"{{:<{w}}}" for w in col_w)
+    lines: list[str] = []
+    if show_header:
+        lines.append(fmt.format(*headers))
+        lines.append("  ".join("-" * w for w in col_w))
+    for row in rows:
+        padded = [str(row[i]) if i < len(row) else "" for i in range(len(headers))]
+        lines.append(fmt.format(*padded))
+    return lines
 
 
 def r_table(headers: list[str], rows: list[list[str]], title: str = "", show_header: bool = True) -> None:
@@ -90,15 +132,31 @@ def r_table(headers: list[str], rows: list[list[str]], title: str = "", show_hea
     else:
         if title:
             r_rule(title)
-        col_w = [max(len(str(r[i])) if i < len(r) else 0 for r in rows) for i in range(len(headers))]
-        col_w = [max(col_w[i], len(headers[i])) for i in range(len(headers))]
-        fmt = "  ".join(f"{{:<{w}}}" for w in col_w)
-        if show_header:
-            print(fmt.format(*headers))
-            print("  ".join("-" * w for w in col_w))
-        for row in rows:
-            padded = [str(row[i]) if i < len(row) else "" for i in range(len(headers))]
-            print(fmt.format(*padded))
+        for line in _table_lines(headers, rows, show_header):
+            print(line)
+
+
+BEST_DAY_CARD_WIDTH = 40
+
+
+def display_best_day(headers: list[str], rows: list[list[str]], title: str) -> None:
+    inner = BEST_DAY_CARD_WIDTH - 2
+    if _use_rich():
+        assert console is not None
+        table = _build_rich_table(headers, rows)
+        col1 = max(len(headers[1]), 15)
+        table.columns[0].width = max(inner - 7 - col1, len(headers[0]))
+        table.columns[1].width = col1
+        for col in table.columns:
+            col.justify = "center"
+        console.print(Panel(table, title=title, border_style="cyan", expand=False))
+    else:
+        sep = "=" * BEST_DAY_CARD_WIDTH
+        print(f"\n{sep}")
+        print(f"  {title}")
+        print(sep)
+        lines = _table_lines(headers, rows, total_width=inner, center=True)
+        r_print("\n".join(f"  {line}" for line in lines))
 
 
 COLOR_TEMP = [(35, "red"), (28, "yellow"), (18, "green"), (10, "cyan"), (-99, "blue")]
@@ -106,7 +164,7 @@ COLOR_RAIN = [(60, "red"), (20, "yellow"), (-1, "green")]
 
 
 def _colorize(text: str, val: float, steps: Sequence[tuple[float, str]]) -> str:
-    if not HAS_RICH:
+    if not _colors_active():
         return text
     for threshold, color in steps:
         if val > threshold:
@@ -115,7 +173,11 @@ def _colorize(text: str, val: float, steps: Sequence[tuple[float, str]]) -> str:
 
 
 def _temp_color(val: float, unit_sym: str) -> str:
-    return _colorize(f"{val}{unit_sym}", val, COLOR_TEMP)
+    text = f"{val}{unit_sym}"
+    compare = (val - 32) * 5 / 9 if unit_sym == "°F" else val
+    if _colors_active() and compare >= COLOR_TEMP[0][0]:
+        return f"[{COLOR_TEMP[0][1]}]{text}[/{COLOR_TEMP[0][1]}]"
+    return _colorize(text, compare, COLOR_TEMP[1:])
 
 
 def _rain_color(val: int | float) -> str:
@@ -257,8 +319,7 @@ def display_weather(
     show_forecast: bool = True,
     show_hourly: bool = True,
 ) -> None:
-    global _COLORS_ENABLED
-    _COLORS_ENABLED = cfg.get("color", True)
+    _set_colors_enabled(cfg.get("color", True))
     block = format_weather_block(nome, dados, cfg, city_info=city_info)
     r_panel(block, title=f"  {t('current_weather')} {nome.capitalize()}  ")
 
@@ -341,10 +402,8 @@ def display_weather(
 def display_comparison(
     cidades_dados: list[tuple[str, dict, dict[str, Any], dict | None]],
 ) -> None:
-    global _COLORS_ENABLED
     if cidades_dados:
-        first_cfg = cidades_dados[0][2]
-        _COLORS_ENABLED = first_cfg.get("color", True)
+        _set_colors_enabled(cidades_dados[0][2].get("color", True))
     blocks: list = []
     for nome, dados, cfg, city_info in cidades_dados:
         block = format_weather_block(nome, dados, cfg, city_info=city_info)

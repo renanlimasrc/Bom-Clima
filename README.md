@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.2.6-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -27,7 +27,7 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 
 ### Display & UI
 - **Colored output** — Beautiful terminal output with Rich library, automatic fallback for non-Rich environments
-- **Watch mode** (`--watch`) — Auto-refresh weather every N seconds with **dynamic intervals** (adjusts based on rain probability)
+- **Monochrome cards** — `--no-color` keeps the card layout with zero ANSI codes
 - **Side-by-side comparison** (`--compare`) — Compare weather between multiple cities
 - **Localized weekday names** — Days appear in your system's language (Seg/Mon/Lun)
 - **Temperature bar** — Visual temperature range display (`18°C [====.====] 28°C`)
@@ -112,12 +112,11 @@ bom-clima sao paulo --aqi
 # Include weather alerts
 bom-clima miami --alerts
 
-# Watch mode (update every 60 seconds)
-# Note: Interval adjusts dynamically based on rain probability
-bom-clima sao paulo --watch 60
-
 # Best day for outdoor activities
 bom-clima sao paulo --best-day
+
+# Compare with yesterday
+bom-clima sao paulo --vs-yesterday
 
 # Disable colored output
 bom-clima sao paulo --no-color
@@ -176,7 +175,6 @@ bom-clima --history
 | `--aqi` | Include air quality (PM2.5, US AQI) |
 | `--imperial` | Use imperial units (°F, mph, in) |
 | `--no-color` | Disable colored output |
-| `--watch SEC` | Monitor mode: update every N seconds (dynamic interval) |
 | `--export FMT` | Export data: json, csv, yaml, or xml (comma-separated) |
 | `--output FILE` | Output file (default: ~/Documents/<city>.<fmt>) |
 | `--lang LANG` | Set language: pt, en, es |
@@ -184,6 +182,7 @@ bom-clima --history
 | `--config-show` | Show current configuration |
 | `--history` | Show query history |
 | `--best-day` | Show the best day this week for outdoor activities |
+| `--vs-yesterday` | Compare today's temperature with yesterday |
 | `--no-cache` | Bypass cache and fetch fresh data |
 | `--verbose, -V` | Show debug information |
 | `--help, -h` | Show help message |
@@ -288,7 +287,7 @@ cd Bom-Clima
 python -m pytest tests/test_bom_clima.py -v
 ```
 
-All 100 tests should pass
+All 492 tests should pass
 
 ## 📜 License
 

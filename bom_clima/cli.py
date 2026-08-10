@@ -3,8 +3,6 @@
 import argparse
 import os
 import sys
-import time
-from datetime import datetime
 from typing import Any
 
 from . import __version__
@@ -14,11 +12,13 @@ from .config import load_config, save_config
 from .constants import VALID_CONFIG_KEYS, ensure_app_dir
 from .display import (
     HAS_RICH,
+    _set_colors_enabled,
+    display_best_day,
     display_comparison,
     display_weather,
+    r_panel,
     r_print,
     r_rule,
-    r_table,
 )
 from .formatters import export_all_formats, score_days
 from .history import add_history, load_history
@@ -48,7 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
     disp.add_argument("-n", "--no-color", action="store_true", help=t("help_no_color"))
 
     modes = p.add_argument_group(t("grp_modes"))
-    modes.add_argument("-w", "--watch", type=int, metavar="SEC", help=t("help_watch"))
     modes.add_argument("-y", "--history", action="store_true", help=t("help_history"))
     modes.add_argument("--no-cache", action="store_true", help=t("no_cache_help"))
     modes.add_argument("--verbose", "-V", action="store_true", help=t("verbose_help"))
@@ -96,10 +95,13 @@ def show_help() -> None:
     lines.append(f"    -n, --no-color    {t('help_display_color')}")
     lines.append("")
     lines.append(f"  \U0001f504 {t('help_modes')}")
-    lines.append(f"    -w, --watch SEC   {t('help_modes_watch')}")
     lines.append(f"    -y, --history     {t('help_modes_history')}")
     lines.append(f"    --no-cache        {t('no_cache_help')}")
     lines.append(f"    -V, --verbose     {t('verbose_help')}")
+    lines.append("")
+    lines.append(f"  \U0001f4a1 {t('grp_smart')}")
+    lines.append(f"    --best-day        {t('help_best_day')}")
+    lines.append(f"    --vs-yesterday    {t('help_vs_yesterday')}")
     lines.append("")
     lines.append(f"  \U0001f4be {t('help_export')}")
     lines.append(f"    -e, --export FMT  {t('help_export_format')}")
@@ -118,7 +120,6 @@ def show_help() -> None:
     lines.append(f"    {t('help_ex_simple')}")
     lines.append(f"    {t('help_ex_compare')}")
     lines.append(f"    {t('help_ex_imperial')}")
-    lines.append(f"    {t('help_ex_watch')}")
     lines.append(f"    {t('help_ex_detect')}")
     lines.append(f"    {t('help_ex_export')}")
     lines.append(f"    {t('help_ex_lang')}")
@@ -191,11 +192,15 @@ def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dic
                     v = float(v)
                 cfg[k] = v
                 save_config(cfg)
+    _set_colors_enabled(cfg.get("color", True))
     if args.config_show:
-        r_rule(t("config_title"))
-        for k, v in cfg.items():
-            r_print(f"  {k}: {v}")
-        r_print("")
+        labels = [f"{k}:" for k in cfg]
+        max_w = max(len(l) for l in labels) if labels else 0
+        content = "\n".join(
+            f"  {l}{' ' * (max_w - len(l))} {v}"
+            for l, v in zip(labels, cfg.values())
+        )
+        r_panel(content, title=t("config_title"))
         sys.exit(0)
     return cfg
 
@@ -205,64 +210,6 @@ def _validate_positive(value: int | None, flag: str) -> None:
         print(t("validation_positive").format(flag=flag, value=value))
         build_parser().print_help()
         sys.exit(1)
-
-
-def _calc_dynamic_interval(dados: dict, base_interval: int) -> int:
-    hourly = dados.get("hourly", {})
-    if not hourly:
-        return base_interval
-    now = datetime.now()
-    probs = []
-    for i, ts in enumerate(hourly.get("time", [])):
-        try:
-            ts_dt = datetime.fromisoformat(ts)
-            if ts_dt > now:
-                probs.append(hourly["precipitation_probability"][i])
-                if len(probs) >= 6:
-                    break
-        except (ValueError, IndexError):
-            break
-    if not probs:
-        return base_interval
-    max_prob = max(probs)
-    if max_prob >= 70:
-        return max(30, base_interval // 2)
-    elif max_prob >= 40:
-        return max(45, int(base_interval * 0.75))
-    return base_interval
-
-
-def watch_mode(cidade: str, cfg: dict[str, Any], interval: int, args: argparse.Namespace) -> None:
-    cidade_info = search_city(cidade, no_cache=args.no_cache)
-    while True:
-        try:
-            if HAS_RICH:
-                from .display import console
-                assert console is not None
-                console.clear()
-            else:
-                print("\033[2J\033[H", end="")
-            dados = fetch_weather_data(
-                cidade_info["latitude"],
-                cidade_info["longitude"],
-                unit_system=cfg.get("unit_system", "metric"),
-                include_alerts=args.alerts,
-                include_aqi=args.aqi,
-                forecast_days=cfg.get("forecast_days", 5),
-                no_cache=args.no_cache,
-                verbose=args.verbose,
-            )
-            nome_correto = cidade_info.get("name", cidade)
-            display_weather(nome_correto, dados, cfg, city_info=cidade_info)
-            dynamic_interval = _calc_dynamic_interval(dados, interval)
-            label = t("watch_label").format(interval=dynamic_interval)
-            if dynamic_interval != interval:
-                label += t("watch_precip_expected")
-            r_print(f"  \u23f3 {label}\n")
-            time.sleep(dynamic_interval)
-        except KeyboardInterrupt:
-            print("\n")
-            sys.exit(0)
 
 
 def _export_city_data(
@@ -281,12 +228,30 @@ def _export_city_data(
     export_all_formats(dados, nome, export_fmt, dest)
 
 
+def _show_vs_yesterday(dados: dict) -> None:
+    daily = dados.get("daily", {})
+    temps_max = daily.get("temperature_2m_max", [])
+    if len(temps_max) < 2:
+        return
+    yesterday_max = temps_max[0]
+    today_max = temps_max[1]
+    delta = round(today_max - yesterday_max, 1)
+    if delta > 0:
+        text = t("vs_warmer").format(delta=f"+{delta}")
+    elif delta < 0:
+        text = t("vs_colder").format(delta=delta)
+    else:
+        text = t("vs_same")
+    r_panel(text, title=t("vs_yesterday"))
+
+
 def _fetch_and_display(
     city: str,
     cfg: dict[str, Any],
     args: argparse.Namespace,
 ) -> tuple[str, dict, dict]:
     cidade_info = search_city(city, no_cache=args.no_cache)
+    past_days = 1 if getattr(args, "vs_yesterday", False) else 0
     dados = fetch_weather_data(
         cidade_info["latitude"],
         cidade_info["longitude"],
@@ -294,6 +259,7 @@ def _fetch_and_display(
         include_alerts=args.alerts,
         include_aqi=args.aqi,
         forecast_days=cfg.get("forecast_days", 5),
+        past_days=past_days,
         no_cache=args.no_cache,
         verbose=args.verbose,
     )
@@ -316,7 +282,6 @@ def main() -> None:
 
     _validate_positive(args.days, "--days")
     _validate_positive(args.hours, "--hours")
-    _validate_positive(args.watch, "--watch")
 
     cfg = load_config()
     cfg = apply_config_overrides(cfg, args)
@@ -337,16 +302,20 @@ def main() -> None:
             if loc.get("country"):
                 city_name += f", {loc['country']}"
             print(f"\U0001f4cd {t('detect_label')}: {city_name} (lat: {loc['lat']}, lon: {loc['lon']})")
+            past_days = 1 if getattr(args, "vs_yesterday", False) else 0
             dados = fetch_weather_data(
                 loc["lat"], loc["lon"],
                 unit_system=cfg.get("unit_system", "metric"),
                 include_alerts=args.alerts,
                 include_aqi=args.aqi,
                 forecast_days=cfg.get("forecast_days", 5),
+                past_days=past_days,
                 no_cache=args.no_cache,
                 verbose=args.verbose,
             )
             display_weather(city_name, dados, cfg)
+            if args.vs_yesterday:
+                _show_vs_yesterday(dados)
             add_history(city_name, loc["lat"], loc["lon"])
             if args.export:
                 export_all_formats(dados, city_name, args.export, args.output)
@@ -379,9 +348,7 @@ def main() -> None:
                 print(t("empty_city"))
                 sys.exit(1)
 
-    if args.watch and len(cities) == 1:
-        watch_mode(cities[0], cfg, args.watch, args)
-    elif args.compare and len(cities) > 1:
+    if args.compare and len(cities) > 1:
         resultados: list[tuple[str, dict, dict[str, Any], dict | None]] = []
         for city in cities:
             try:
@@ -408,9 +375,9 @@ def main() -> None:
                 dias.sort(key=lambda x: x[1], reverse=True)
                 headers = [t("tbl_date"), t("best_day_score")]
                 rows = [[d[0], f"{d[1]:.0f}"] for d in dias[:3]]
-                r_rule(t("best_day"))
-                r_table(headers, rows)
-                r_print("")
+                display_best_day(headers, rows, t("best_day"))
+        if args.vs_yesterday:
+            _show_vs_yesterday(dados)
         add_history(cities[0], cidade_info["latitude"], cidade_info["longitude"])
         if args.export:
             export_all_formats(dados, nome, args.export, args.output)
@@ -422,6 +389,8 @@ def main() -> None:
                 print(f"\n{e}\n")
                 sys.exit(1)
             display_weather(nome, dados, cfg, city_info=cidade_info)
+            if args.vs_yesterday:
+                _show_vs_yesterday(dados)
             add_history(city, cidade_info["latitude"], cidade_info["longitude"])
             if args.export:
                 _export_city_data(dados, nome, args.export, args.output)
