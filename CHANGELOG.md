@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-08-12
+
+### Fixed
+- CSV export now uses today's daily values instead of yesterday's when combined with `--vs-yesterday`
+- `--config-set` rejects non-finite numeric values (`inf`, `nan`) that previously crashed
+- `history_limit=0` now clears history instead of keeping every entry (`history[-0:]` gotcha)
+- YAML export now emits valid YAML for list values (daily/hourly arrays)
+- `--config-set lang=...` now persists the language, matching `--lang`
+- Unknown WMO weather codes render as "Unknown" instead of "Clear sky"
+- Extreme-weather detection no longer counts past-hour CAPE (a storm yesterday no longer flags today)
+- Query history no longer crashes on legacy/malformed entries
+- Panel title no longer mangles the city name via `capitalize()`
+
+### Changed
+- Weather cache key now includes `include_alerts` and `past_days`, fixing stale results for `--alerts` and `--vs-yesterday`
+- Imperial units now correctly normalized for dew point comfort, recommendations, extreme detection, and day scoring (not only temperature colors)
+- Time-remaining and rain-window calculations now use the location's local time
+- Weather panel label column is no longer inflated by the city name/weather description
+- `forecast_days` from config is clamped to 1–15
+- Multi-city input is documented as comma-separated only (spaces are part of a single city name)
+
+### Added
+- `today_index()` helper keeps "today" correct when `--vs-yesterday` fetches past days
+- Unit-conversion helpers (`_to_celsius`, `_to_kmh`, `_to_mm`, `unit_symbols`)
+- Regression tests for all fixes above
+
 ## [0.2.7] - 2026-08-10
 
 ### Changed

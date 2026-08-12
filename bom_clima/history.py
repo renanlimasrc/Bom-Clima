@@ -18,7 +18,10 @@ def load_history() -> list[dict]:
 
 
 def save_history(history: list[dict], limit: int = 50) -> None:
-    history = history[-limit:]
+    if limit <= 0:
+        history = []
+    else:
+        history = history[-limit:]
     HISTORY_FILE.write_text(json.dumps(history, indent=2, ensure_ascii=False), "utf-8")
 
 

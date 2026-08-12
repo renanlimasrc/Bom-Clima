@@ -3,13 +3,13 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.2.7-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.2.8-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
 
 ### Core Features
-- **Multi-city search** — Query multiple cities in a single command (comma-separated or space-separated)
+- **Multi-city search** — Query multiple cities in a single command (comma-separated)
 - **5-day forecast** (up to 15 days available) with daily min/max temperatures
 - **Hourly forecast** — Up to 24 hours of detailed hourly data with condition descriptions
 - **Multiple languages** — Supports Portuguese (pt), English (en), and Spanish (es) with automatic locale detection
@@ -81,12 +81,12 @@ bom-clima --help
 bom-clima sao paulo
 bom-clima new york
 
-# Multiple cities (space or comma-separated)
-bom-clima tokyo london
+# Multiple cities (comma-separated)
+bom-clima "tokyo,london"
 bom-clima "sao paulo,rio de janeiro"
 
 # Compare cities side by side
-bom-clima tokyo london --compare
+bom-clima "tokyo,london" --compare
 
 # Auto-detect location via IP
 bom-clima --detect
@@ -170,7 +170,7 @@ bom-clima --history
 | `--detect` | Auto-detect location via IP |
 | `--compare` | Compare cities side by side |
 | `--days N` | Number of days in forecast (default: 5, max: 15) |
-| `--hours N` | Number of hours in hourly forecast (default: 12) |
+| `--hours N` | Number of hours in hourly forecast (default: 6) |
 | `--alerts` | Include weather alerts |
 | `--aqi` | Include air quality (PM2.5, US AQI) |
 | `--imperial` | Use imperial units (°F, mph, in) |
@@ -287,7 +287,7 @@ cd Bom-Clima
 python -m pytest tests/test_bom_clima.py -v
 ```
 
-All 492 tests should pass
+All 127 tests should pass
 
 ## 📜 License
 

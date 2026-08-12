@@ -17,6 +17,7 @@ from .formatters import (
     get_weekday_name,
     get_wmo,
     moon_phase_name,
+    today_index,
     wind_arrow,
     wind_direction,
 )
@@ -203,9 +204,11 @@ def format_weather_block(
     atual = dados["current"]
     diario = dados["daily"]
     lang = _current_lang()
-    unit_sym = "°F" if cfg.get("unit_system") == "imperial" else "°C"
-    wind_unit = "mph" if cfg.get("unit_system") == "imperial" else "km/h"
-    precip_unit = "in" if cfg.get("unit_system") == "imperial" else "mm"
+    unit = cfg.get("unit_system", "metric")
+    unit_sym = "°F" if unit == "imperial" else "°C"
+    wind_unit = "mph" if unit == "imperial" else "km/h"
+    precip_unit = "in" if unit == "imperial" else "mm"
+    idx = today_index(dados)
 
     wmo_code = atual.get("weather_code", 0)
     wmo_desc, _wmo_icon = get_wmo(wmo_code, lang)
@@ -223,27 +226,30 @@ def format_weather_block(
     entries.append(("", location_str, ""))
     try:
         dt_updated = datetime.fromisoformat(atual["time"])
+        now_dt: datetime | None = dt_updated
         updated_display = f"{dt_updated.strftime('%H:%M')} ({dt_updated.strftime('%d/%m/%Y')})"
     except ValueError:
+        now_dt = None
         updated_display = atual["time"]
     entries.append(("", t("updated"), updated_display))
     entries.append(("", wmo_desc, ""))
 
     entries.append(("", t("temperature"), f"{atual['temperature_2m']}{unit_sym}"))
     entries.append(("", t("feels_like"), f"{atual['apparent_temperature']}{unit_sym}"))
-    entries.append(("", t("max_today"), f"{diario['temperature_2m_max'][0]}{unit_sym}"))
-    entries.append(("", t("min_today"), f"{diario['temperature_2m_min'][0]}{unit_sym}"))
+    entries.append(("", t("max_today"), f"{diario['temperature_2m_max'][idx]}{unit_sym}"))
+    entries.append(("", t("min_today"), f"{diario['temperature_2m_min'][idx]}{unit_sym}"))
 
     t_now = atual["temperature_2m"]
-    t_min = diario["temperature_2m_min"][0]
-    t_max = diario["temperature_2m_max"][0]
+    t_min = diario["temperature_2m_min"][idx]
+    t_max = diario["temperature_2m_max"][idx]
     bar_line = _build_temp_bar(t_now, t_min, t_max, unit_sym)
     if bar_line:
         entries.append(("  ", "", bar_line))
 
     entries.append(("", t("humidity"), f"{atual['relative_humidity_2m']}%"))
-    dir_name = wind_direction(atual["wind_direction_10m"])
-    arrow = wind_arrow(atual["wind_direction_10m"])
+    wind_deg = atual.get("wind_direction_10m") or 0
+    dir_name = wind_direction(wind_deg)
+    arrow = wind_arrow(wind_deg)
     entries.append(("", t("wind"), f"{atual['wind_speed_10m']} {wind_unit} {arrow} ({dir_name})"))
     gusts = atual.get("wind_gusts_10m")
     if gusts and gusts > 0:
@@ -256,20 +262,20 @@ def format_weather_block(
         entries.append(("", t("cloud_cover"), f"{cloud}%"))
     dew = atual.get("dew_point_2m")
     if dew is not None:
-        comfort = dewpoint_comfort(float(dew), lang)
+        comfort = dewpoint_comfort(float(dew), lang, unit_system=unit)
         entries.append(("", t("dew_point"), f"{dew}{unit_sym} ({comfort})"))
     vis = atual.get("visibility")
     if vis is not None:
         entries.append(("", t("visibility_label"), f"{vis / 1000:.1f} {t('visibility_unit')}"))
 
     entries.append(("", t("rain_now"), f"{atual.get('rain', 0)} {precip_unit}"))
-    entries.append(("", t("rain_chance"), f"{diario['precipitation_probability_max'][0]}%"))
-    entries.append(("", t("total_precip"), f"{diario['precipitation_sum'][0]} {precip_unit}"))
-    entries.append(("", t("rain_hours"), f"{diario['precipitation_hours'][0]} h"))
+    entries.append(("", t("rain_chance"), f"{diario['precipitation_probability_max'][idx]}%"))
+    entries.append(("", t("total_precip"), f"{diario['precipitation_sum'][idx]} {precip_unit}"))
+    entries.append(("", t("rain_hours"), f"{diario['precipitation_hours'][idx]} h"))
 
-    entries.append(("", t("sunrise"), format_timestamp(diario["sunrise"][0]) + format_time_remaining(diario["sunrise"][0])))
-    entries.append(("", t("sunset"), format_timestamp(diario["sunset"][0]) + format_time_remaining(diario["sunset"][0])))
-    entries.append(("", t("day_length"), format_duration(diario["daylight_duration"][0])))
+    entries.append(("", t("sunrise"), format_timestamp(diario["sunrise"][idx]) + format_time_remaining(diario["sunrise"][idx], now=now_dt)))
+    entries.append(("", t("sunset"), format_timestamp(diario["sunset"][idx]) + format_time_remaining(diario["sunset"][idx], now=now_dt)))
+    entries.append(("", t("day_length"), format_duration(diario["daylight_duration"][idx])))
     entries.append(("", t("uv_index"), str(atual.get("uv_index", "N/A"))))
 
     aqi_data = dados.get("air_quality", {})
@@ -299,7 +305,7 @@ def format_weather_block(
         else:
             sep_lines.append((emoji, ""))
 
-    max_label = max((display_width(lbl) for lbl, _ in sep_lines if lbl and lbl.strip()), default=0)
+    max_label = max((display_width(lbl) for lbl, val in sep_lines if val and lbl.strip()), default=0)
 
     for label, value in sep_lines:
         if value:
@@ -321,7 +327,7 @@ def display_weather(
 ) -> None:
     _set_colors_enabled(cfg.get("color", True))
     block = format_weather_block(nome, dados, cfg, city_info=city_info)
-    r_panel(block, title=f"  {t('current_weather')} {nome.capitalize()}  ")
+    r_panel(block, title=f"  {t('current_weather')} {nome}  ")
 
     if not show_forecast and not show_hourly:
         r_print("")
@@ -363,7 +369,8 @@ def display_weather(
     if show_forecast and len(diario.get("time", [])) > 0:
         forecast_headers = [t("tbl_date"), t("condition_short"), t("tbl_min"), t("tbl_max"), t("tbl_rain_pct")]
         forecast_rows: list[list[str]] = []
-        for i in range(min(days, len(diario["time"]))):
+        idx = today_index(dados)
+        for i in range(idx, min(idx + days, len(diario["time"]))):
             dt = datetime.fromisoformat(diario["time"][i])
             weekday = get_weekday_name(dt, lang)
             data_fmt = dt.strftime(f"%d/%m ({weekday})")
@@ -380,7 +387,7 @@ def display_weather(
         r_table(forecast_headers, forecast_rows, title=t("forecast_days").format(n=days))
 
     alerts = dados.get("alerts", [])
-    extremes = detect_extremes(dados)
+    extremes = detect_extremes(dados, unit_system=cfg.get("unit_system", "metric"))
     recs = generate_recommendations(dados, cfg)
 
     if alerts or extremes or recs:

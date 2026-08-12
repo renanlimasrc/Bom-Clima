@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.2.7
+- **Version**: 0.2.8
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.2.7"
+│   ├── __init__.py           # Package init, __version__ = "0.2.8"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)
@@ -43,7 +43,7 @@ Bom-Clima/
 │       ├── pt.json
 │       └── es.json
 ├── tests/
-│   └── test_bom_clima.py     # 492 unit tests
+│   └── test_bom_clima.py     # 127 unit tests
 ├── pyproject.toml            # Project metadata, tool config
 ├── requirements.txt          # Runtime dependencies
 ├── .gitignore
@@ -74,7 +74,7 @@ The main orchestrator. Handles argument parsing, config loading, and dispatches 
 - **Config**: `--lang`, `--config-set K=V`, `--config-show`
 - **Info**: `--help`, `--version`
 
-### `api.py` — API Client (151 lines)
+### `api.py` — API Client (153 lines)
 
 HTTP client for Open-Meteo geocoding, weather, air quality, and alerts APIs.
 
@@ -88,7 +88,7 @@ HTTP client for Open-Meteo geocoding, weather, air quality, and alerts APIs.
 - `daily`: temperature_2m_max/min, sunrise, sunset, daylight_duration, precipitation_probability_max, precipitation_sum, precipitation_hours, weather_code, wind_speed_10m_max, wind_direction_10m_dominant, sunshine_duration, uv_index_max
 - `hourly`: temperature_2m, apparent_temperature, rain, relative_humidity_2m, precipitation_probability, wind_speed_10m, cloud_cover, weather_code, uv_index, is_day, cape
 
-### `cache.py` — SQLite Cache (94 lines)
+### `cache.py` — SQLite Cache (95 lines)
 
 Two tables: `geo_cache` and `weather_cache`. Each row has `query/key`, `data` (JSON), and `ts` (timestamp).
 
@@ -121,7 +121,7 @@ DEFAULT_CONFIG = {
 **Valid config keys** (enforced in `cli.py`):
 `unit_system`, `city_default`, `forecast_days`, `forecast_hours`, `color`, `history_limit`, `lang`
 
-### `constants.py` — Constants (103 lines)
+### `constants.py` — Constants (109 lines)
 
 All static data lives here:
 
@@ -137,7 +137,7 @@ All static data lives here:
 - **EXTREME_*** — Thresholds for extreme weather detection (heat >35°C, cold <0°C, wind >50km/h, rain >30mm, UV >8, CAPE >1500)
 - **DAY_SCORE_IDEAL_TEMP** — Ideal temperature (22°C) for day scoring
 
-### `display.py` — Display Rendering (418 lines)
+### `display.py` — Display Rendering (425 lines)
 
 Handles both Rich and plain text output. Auto-detects Rich availability.
 
@@ -165,16 +165,18 @@ Handles both Rich and plain text output. Auto-detects Rich availability.
 
 **Rich availability**: Checked via `HAS_RICH` global. If `rich` is not installed, all display functions fall back to plain text. With colors disabled (`--no-color`), Rich still renders the card structure but fully monochrome.
 
-### `formatters.py` — Formatters & Export (385 lines)
+### `formatters.py` — Formatters & Export (449 lines)
 
 Data formatting and export utilities.
 
 **Key functions:**
+- `today_index(dados) → int` — Index of today in the daily arrays (handles `past_days` offsets)
+- `unit_symbols(unit_system) → tuple[str, str, str]` — (°F/°C, mph/km/h, in/mm) symbols
 - `wind_direction(degrees) → str` — Converts degrees to compass direction
 - `wind_arrow(degrees) → str` — Returns Unicode arrow for wind direction (↑, ↗, →, ↘, ↓, ↙, ←, ↖)
 - `format_duration(segundos) → str` — Seconds → "Xh Ymin"
 - `format_timestamp(timestamp) → str` — ISO timestamp → "HH:MM"
-- `format_time_remaining(timestamp) → str` — Time until/since event
+- `format_time_remaining(timestamp, now=None) → str` — Time until/since event (uses the location's local time)
 - `get_weekday_name(dt, lang) → str` — Localized weekday abbreviation
 - `get_wmo(code, lang) → tuple[str, str]` — WMO code → (description, emoji)
 - `get_aqi_label(aqi, lang) → str` — AQI value → quality label
@@ -182,13 +184,13 @@ Data formatting and export utilities.
 - `display_width(text) → int` — Calculates display width (handles emoji)
 - `export_data(dados, nome, fmt, output)` — Exports to JSON/CSV/YAML/XML
 - `export_all_formats(dados, nome, export_str, output)` — Exports to multiple formats
-- `dewpoint_comfort(dp, lang) → str` — Classifies dew point as dry/comfortable/muggy/oppressive
+- `dewpoint_comfort(dp, lang, unit_system) → str` — Classifies dew point as dry/comfortable/muggy/oppressive
 - `generate_recommendations(dados, cfg) → list[str]` — Smart clothing/activity advice based on weather
-- `detect_extremes(dados) → list[str]` — Flags heat waves, cold snaps, storms, extreme wind/rain/UV
+- `detect_extremes(dados, unit_system) → list[str]` — Flags heat waves, cold snaps, storms, extreme wind/rain/UV
 - `rain_window_summary(dados) → list[str]` — Lists upcoming rain hours in the next 24h
-- `score_days(dados) → list[tuple[str, float]]` — Scores each forecast day (0-100) for outdoor activities
+- `score_days(dados, unit_system) → list[tuple[str, float]]` — Scores each forecast day (0-100) for outdoor activities
 
-### `history.py` — Query History (35 lines)
+### `history.py` — Query History (38 lines)
 
 Simple JSON-based history at `~/.local/share/bom-clima/history.json`.
 
@@ -266,7 +268,7 @@ All app data follows the XDG Base Directory Specification:
 
 ## Testing
 
-**Location**: `tests/test_bom_clima.py` (1042 lines, 492 tests)
+**Location**: `tests/test_bom_clima.py` (1232 lines, 127 tests)
 
 **Test classes:**
 - `TestWindDirection` — Compass direction conversion
@@ -279,7 +281,7 @@ All app data follows the XDG Base Directory Specification:
 - `TestCache` — SQLite cache roundtrip
 - `TestFormatWeatherBlock` — Weather block rendering
 - `TestI18n` — Language detection, translations
-- `TestCityParsing` — Comma/space separated city parsing
+- `TestCityParsing` — Comma-separated city parsing
 - `TestCLIArguments` — Argument parsing
 - `TestDisplayWidth` — Unicode display width
 - `TestDocumentsDir` — Documents directory detection
@@ -339,5 +341,5 @@ python bom-clima.py sao paulo
 - **Error handling**: `ValueError` for user-facing errors, `requests.RequestException` for API errors
 - **Translations**: All user-facing strings go through `t(key)` function
 - **Rich fallback**: Display functions use Rich when installed; with colors disabled they still render the card structure in monochrome (zero ANSI codes)
-- **Cache keys**: Weather cache uses `"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{forecast_days}"`
+- **Cache keys**: Weather cache uses `"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{include_alerts}_{past_days}_{forecast_days}"`
 - **Type annotations**: `json.loads()` returns require explicit `dict` or `list[dict]` type annotations to satisfy mypy

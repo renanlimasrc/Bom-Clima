@@ -29,6 +29,38 @@ from .constants import (
 from .i18n import _current_lang, t
 
 
+def _to_celsius(value: float, unit_system: str) -> float:
+    return (value - 32.0) * 5.0 / 9.0 if unit_system == "imperial" else value
+
+
+def _to_kmh(value: float, unit_system: str) -> float:
+    return value * 1.60934 if unit_system == "imperial" else value
+
+
+def _to_mm(value: float, unit_system: str) -> float:
+    return value * 25.4 if unit_system == "imperial" else value
+
+
+def unit_symbols(unit_system: str) -> tuple[str, str, str]:
+    if unit_system == "imperial":
+        return "°F", "mph", "in"
+    return "°C", "km/h", "mm"
+
+
+def today_index(dados: dict) -> int:
+    """Return the index of today inside the daily arrays (handles past_days offsets)."""
+    times = dados.get("daily", {}).get("time", [])
+    if not times:
+        return 0
+    current_time = str(dados.get("current", {}).get("time", ""))
+    today = current_time[:10]
+    if today:
+        for i, ts in enumerate(times):
+            if str(ts)[:10] == today:
+                return i
+    return 0
+
+
 def wind_direction(degrees: float) -> str:
     idx = int((degrees + 11.25) / 22.5) % 16
     return COMPASS[idx]
@@ -53,11 +85,11 @@ def format_timestamp(timestamp: str) -> str:
         return timestamp[-5:]
 
 
-def format_time_remaining(timestamp: str) -> str:
+def format_time_remaining(timestamp: str, now: datetime | None = None) -> str:
     try:
-        target = datetime.fromisoformat(timestamp)
-        now = datetime.now(target.tzinfo)
-        diff = target - now
+        target = datetime.fromisoformat(timestamp).replace(tzinfo=None)
+        current = (now or datetime.now()).replace(tzinfo=None)
+        diff = target - current
         total_seconds = int(diff.total_seconds())
         hours = abs(total_seconds) // 3600
         minutes = (abs(total_seconds) % 3600) // 60
@@ -76,8 +108,9 @@ def get_weekday_name(dt: datetime, lang: str | None = None) -> str:
 
 def get_wmo(code: int, lang: str | None = None) -> tuple[str, str]:
     lang = lang or _current_lang()
-    fallback: dict[str, tuple[str, str]] = {"pt": ("Limpo", "☀️"), "en": ("Clear sky", "☀️"), "es": ("Despejado", "☀️")}
-    entry = WMO_CODES.get(code) or WMO_CODES.get(0) or fallback
+    entry = WMO_CODES.get(code)
+    if entry is None:
+        entry = {"pt": ("Desconhecido", "\u2753"), "en": ("Unknown", "\u2753"), "es": ("Desconocido", "\u2753")}
     return entry.get(lang, entry.get("en", ("Unknown", "\u2753")))
 
 
@@ -139,8 +172,9 @@ def display_width(text: str) -> int:
     return width
 
 
-def dewpoint_comfort(dp: float, lang: str | None = None) -> str:
+def dewpoint_comfort(dp: float, lang: str | None = None, unit_system: str = "metric") -> str:
     lang = lang or _current_lang()
+    dp = _to_celsius(float(dp), unit_system)
     levels = DEWPOINT_COMFORT.get(lang, DEWPOINT_COMFORT["en"])
     for threshold, _key, label in levels:
         if dp <= threshold:
@@ -151,49 +185,69 @@ def dewpoint_comfort(dp: float, lang: str | None = None) -> str:
 def generate_recommendations(dados: dict, cfg: dict) -> list[str]:
     atual = dados.get("current", {})
     diario = dados.get("daily", {})
+    unit = cfg.get("unit_system", "metric")
     temp = atual.get("temperature_2m", 20)
     uv = atual.get("uv_index", 0)
     rain_prob = diario.get("precipitation_probability_max", [0])[0]
     vento = atual.get("wind_speed_10m", 0)
     visibility = atual.get("visibility", 10000)
+    temp_c = _to_celsius(float(temp), unit)
+    wind_kmh = _to_kmh(float(vento), unit)
     recs: list[str] = []
     if rain_prob > 60:
         recs.append(t("rec_umbrella"))
     if uv and float(uv) > 6:
         recs.append(t("rec_sunscreen").format(uv=int(uv)))
-    if temp < 15:
+    if temp_c < 15:
         recs.append(t("rec_jacket"))
-    if temp > 30:
+    if temp_c > 30:
         recs.append(t("rec_light_clothes"))
-    if rain_prob < 20 and 15 <= temp <= 28:
+    if rain_prob < 20 and 15 <= temp_c <= 28:
         recs.append(t("rec_good_run"))
-    if vento > 40:
+    if wind_kmh > 40:
         recs.append(t("rec_windy_care"))
     if visibility and float(visibility) < 2000:
         recs.append(t("rec_fog_careful"))
     return recs
 
 
-def detect_extremes(dados: dict) -> list[str]:
+def detect_extremes(dados: dict, unit_system: str = "metric") -> list[str]:
     atual = dados.get("current", {})
     diario = dados.get("daily", {})
-    temp_max = max(diario.get("temperature_2m_max", [0])) if diario.get("temperature_2m_max") else 0
-    temp_min = min(diario.get("temperature_2m_min", [0])) if diario.get("temperature_2m_min") else 0
+    idx = today_index(dados)
+    temp_max = max(diario.get("temperature_2m_max", [0])[idx:] or [0]) if diario.get("temperature_2m_max") else 0
+    temp_min = min(diario.get("temperature_2m_min", [0])[idx:] or [0]) if diario.get("temperature_2m_min") else 0
     vento = atual.get("wind_speed_10m", 0)
-    rain_total = sum(diario.get("precipitation_sum", [0])) if diario.get("precipitation_sum") else 0
+    rain_total = sum(diario.get("precipitation_sum", [0])[idx:]) if diario.get("precipitation_sum") else 0
     uv = atual.get("uv_index", 0)
     hourly = dados.get("hourly", {})
     cape_vals = hourly.get("cape", [])
     cape = max(cape_vals) if cape_vals else 0
+    current_time = atual.get("time", "")
+    if cape_vals and current_time:
+        try:
+            now_dt = datetime.fromisoformat(current_time).replace(tzinfo=None)
+            future_cape = [
+                c for ts, c in zip(hourly.get("time", []), cape_vals)
+                if datetime.fromisoformat(ts).replace(tzinfo=None) >= now_dt
+            ]
+            cape = max(future_cape) if future_cape else 0
+        except (ValueError, TypeError):
+            cape = max(cape_vals)
+    temp_max_c = _to_celsius(float(temp_max), unit_system)
+    temp_min_c = _to_celsius(float(temp_min), unit_system)
+    wind_kmh = _to_kmh(float(vento), unit_system)
+    rain_mm = _to_mm(float(rain_total), unit_system)
+    t_unit, w_unit, p_unit = unit_symbols(unit_system)
     extremes: list[str] = []
-    if temp_max > EXTREME_HEAT_C:
-        extremes.append(t("extreme_heat").format(temp=temp_max))
-    if temp_min < EXTREME_COLD_C:
-        extremes.append(t("extreme_cold").format(temp=temp_min))
-    if vento > EXTREME_WIND_KMH:
-        extremes.append(t("extreme_wind").format(speed=int(vento)))
-    if rain_total > EXTREME_RAIN_DAILY_MM:
-        extremes.append(t("extreme_rain").format(precip=int(rain_total)))
+    if temp_max_c > EXTREME_HEAT_C:
+        extremes.append(t("extreme_heat").format(temp=temp_max, unit=t_unit))
+    if temp_min_c < EXTREME_COLD_C:
+        extremes.append(t("extreme_cold").format(temp=temp_min, unit=t_unit))
+    if wind_kmh > EXTREME_WIND_KMH:
+        extremes.append(t("extreme_wind").format(speed=int(vento), unit=w_unit))
+    if rain_mm > EXTREME_RAIN_DAILY_MM:
+        extremes.append(t("extreme_rain").format(precip=int(rain_total), unit=p_unit))
     if cape > EXTREME_CAPE:
         extremes.append(t("extreme_storm").format(cape=int(cape)))
     if uv and float(uv) > EXTREME_UV:
@@ -206,11 +260,15 @@ def rain_window_summary(dados: dict) -> list[str]:
     if not hourly or not hourly.get("time"):
         return []
     from datetime import datetime as dt
-    now = dt.now()
+    current = dados.get("current", {})
+    if current.get("time"):
+        now = dt.fromisoformat(current["time"]).replace(tzinfo=None)
+    else:
+        now = dt.now()
     rainy: list[str] = []
     for i, ts in enumerate(hourly["time"]):
         try:
-            ts_dt = dt.fromisoformat(ts)
+            ts_dt = dt.fromisoformat(ts).replace(tzinfo=None)
             hours_diff = (ts_dt - now).total_seconds() / 3600
             if hours_diff < 0 or hours_diff > RAIN_WINDOW_HOURS:
                 continue
@@ -222,13 +280,14 @@ def rain_window_summary(dados: dict) -> list[str]:
     return rainy
 
 
-def score_days(dados: dict) -> list[tuple[str, float]]:
+def score_days(dados: dict, unit_system: str = "metric") -> list[tuple[str, float]]:
     diario = dados.get("daily", {})
     if not diario or not diario.get("time"):
         return []
     from datetime import datetime as dt
+    idx = today_index(dados)
     scores: list[tuple[str, float]] = []
-    for i in range(len(diario["time"])):
+    for i in range(idx, len(diario["time"])):
         date_str = diario["time"][i]
         date_dt = dt.fromisoformat(date_str)
         date_label = date_dt.strftime("%d/%m")
@@ -237,10 +296,12 @@ def score_days(dados: dict) -> list[tuple[str, float]]:
         rain_prob = diario.get("precipitation_probability_max", [0] * (i + 1))[i]
         wind_max = diario.get("wind_speed_10m_max", [0] * (i + 1))[i]
         sunshine = diario.get("sunshine_duration", [0] * (i + 1))[i]
+        avg_c = _to_celsius((float(temp_max) + float(temp_min)) / 2, unit_system)
+        wind_kmh = _to_kmh(float(wind_max), unit_system)
         score = 100.0
         score -= rain_prob * 1.2
-        score -= abs(DAY_SCORE_IDEAL_TEMP - (temp_max + temp_min) / 2) * 3
-        score -= wind_max * 0.5
+        score -= abs(DAY_SCORE_IDEAL_TEMP - avg_c) * 3
+        score -= wind_kmh * 0.5
         score += (sunshine / 3600) * 0.5
         scores.append((date_label, max(0, score)))
     return scores
@@ -248,6 +309,8 @@ def score_days(dados: dict) -> list[tuple[str, float]]:
 
 def _to_yaml(nome: str, dados: dict) -> str:
     def _yaml_safe(val: object) -> str:
+        if isinstance(val, (list, tuple, dict)):
+            return json.dumps(val, ensure_ascii=False)
         s = str(val)
         if any(c in s for c in (":", "#", '"', "'", "\n", "[", "]", "{", "}")):
             return f"'{s}'"
@@ -303,6 +366,7 @@ def export_data(
     elif fmt == "csv":
         atual = dados["current"]
         diario = dados["daily"]
+        idx = today_index(dados)
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
@@ -314,15 +378,15 @@ def export_data(
             nome,
             atual["temperature_2m"],
             atual["apparent_temperature"],
-            diario["temperature_2m_max"][0],
-            diario["temperature_2m_min"][0],
+            diario["temperature_2m_max"][idx],
+            diario["temperature_2m_min"][idx],
             atual["relative_humidity_2m"],
             atual["wind_speed_10m"],
             atual.get("rain", 0),
-            diario["precipitation_probability_max"][0],
-            diario["precipitation_sum"][0],
-            format_timestamp(diario["sunrise"][0]),
-            format_timestamp(diario["sunset"][0]),
+            diario["precipitation_probability_max"][idx],
+            diario["precipitation_sum"][idx],
+            format_timestamp(diario["sunrise"][idx]),
+            format_timestamp(diario["sunset"][idx]),
         ])
         content = buf.getvalue()
     elif fmt == "yaml":

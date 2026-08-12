@@ -176,7 +176,7 @@ class TestWmoCodes:
         assert get_wmo(61, "pt") == ("Chuva leve", "\U0001f327\ufe0f")
 
     def test_unknown(self):
-        assert get_wmo(999, "pt") == ("Limpo", "\u2600\ufe0f")
+        assert get_wmo(999, "pt") == ("Desconhecido", "\u2753")
 
     def test_wmo_english(self):
         desc, _icon = get_wmo(0, "en")
@@ -299,6 +299,26 @@ class TestExport:
         assert "city: Sao Paulo" in content
         assert "current:" in content
 
+    def test_export_csv_uses_today_index(self):
+        dados = {
+            "current": {"time": "2026-08-12T16:00", "temperature_2m": 25,
+                        "apparent_temperature": 27, "relative_humidity_2m": 65,
+                        "wind_speed_10m": 15, "weather_code": 1, "rain": 0, "uv_index": 5},
+            "daily": {"time": ["2026-08-11", "2026-08-12"],
+                      "temperature_2m_max": [30, 28], "temperature_2m_min": [19, 18],
+                      "precipitation_probability_max": [5, 10], "precipitation_sum": [0, 1],
+                      "sunrise": ["2026-08-11T06:29", "2026-08-12T06:30"],
+                      "sunset": ["2026-08-11T18:01", "2026-08-12T18:00"]},
+        }
+        content = export_data(dados, "X", "csv")
+        assert "28" in content
+        assert "06:30" in content
+        assert "06:29" not in content
+
+    def test_export_yaml_serializes_lists(self, mock_weather_response):
+        content = export_data(mock_weather_response, "Sao Paulo", "yaml")
+        assert "'['" not in content
+
     def test_export_xml(self, mock_weather_response):
         content = export_data(mock_weather_response, "Sao Paulo", "xml")
         assert '<?xml version="1.0"' in content
@@ -328,6 +348,17 @@ class TestConfig:
         })()
         result = apply_config_overrides(cfg, args)
         assert result["unit_system"] == "imperial"
+
+    def test_config_set_inf_does_not_crash(self):
+        cfg = {"forecast_days": 5}
+        args = type("Args", (), {
+            "imperial": False, "hours": None, "days": None,
+            "no_color": False, "config_set": ["forecast_days=inf"], "config_show": False,
+            "lang": None, "no_cache": False, "verbose": False,
+        })()
+        with patch("bom_clima.cli.save_config"):
+            result = apply_config_overrides(cfg, args)
+        assert result["forecast_days"] == 5
 
     def test_apply_config_overrides_hours_days(self):
         cfg = {"forecast_hours": 12, "forecast_days": 5}
@@ -458,6 +489,31 @@ class TestFormatWeatherBlock:
         block = format_weather_block("Sao Paulo", mock_weather_with_aqi, cfg)
         assert "Air Quality Index" in block
         assert "45" in block
+
+    def test_uses_today_index_with_past_days(self):
+        dados = {
+            "current": {
+                "time": "2026-04-29T14:00", "temperature_2m": 25.5,
+                "apparent_temperature": 27.0, "relative_humidity_2m": 65,
+                "wind_speed_10m": 15, "wind_direction_10m": 180,
+                "weather_code": 1, "rain": 0, "uv_index": 5.2,
+            },
+            "daily": {
+                "time": ["2026-04-28", "2026-04-29", "2026-04-30"],
+                "temperature_2m_max": [30.0, 28.0, 27.0],
+                "temperature_2m_min": [19.0, 18.0, 17.0],
+                "sunrise": ["2026-04-28T06:29", "2026-04-29T06:30", "2026-04-30T06:31"],
+                "sunset": ["2026-04-28T18:01", "2026-04-29T18:00", "2026-04-30T17:59"],
+                "daylight_duration": [41500, 41400, 41300],
+                "precipitation_probability_max": [5, 10, 20],
+                "precipitation_sum": [0, 0, 1.2],
+                "precipitation_hours": [0, 0, 2],
+            },
+        }
+        cfg = {"unit_system": "metric", "forecast_days": 5, "forecast_hours": 12}
+        block = format_weather_block("Sao Paulo", dados, cfg)
+        assert "28.0°C" in block
+        assert "30.0°C" not in block
 
 
 class TestTempColor:
@@ -711,6 +767,14 @@ class TestFormatTimeRemaining:
         result = format_time_remaining(past)
         assert "-1h" in result
 
+    def test_uses_provided_now(self):
+        from datetime import datetime
+
+        from bom_clima.formatters import format_time_remaining
+        now = datetime(2026, 4, 29, 6, 0)
+        result = format_time_remaining("2026-04-29T08:30", now=now)
+        assert "+2h" in result
+
 
 class TestAddHistory:
     def test_add_history(self, tmp_path):
@@ -720,6 +784,12 @@ class TestAddHistory:
             history = load_history()
             assert len(history) == 1
             assert history[0]["city"] == "TestCity"
+
+    def test_history_limit_zero_empties(self, tmp_path):
+        from bom_clima.history import load_history, save_history
+        with patch("bom_clima.history.HISTORY_FILE", tmp_path / "history.json"):
+            save_history([{"city": "a"}, {"city": "b"}], 0)
+            assert load_history() == []
 
 
 class TestExportAllFormats:
@@ -773,6 +843,11 @@ class TestDewpointComfort:
         from bom_clima.formatters import dewpoint_comfort
         assert dewpoint_comfort(22, "en") == "Oppressive"
 
+    def test_imperial_uses_celsius_thresholds(self):
+        from bom_clima.formatters import dewpoint_comfort
+        assert dewpoint_comfort(60, "en", unit_system="imperial") == "Comfortable"
+        assert dewpoint_comfort(41, "en", unit_system="imperial") == "Dry"
+
 
 class TestGenerateRecommendations:
     def test_umbrella(self):
@@ -801,6 +876,15 @@ class TestGenerateRecommendations:
         }
         recs = generate_recommendations(dados, {})
         assert any("run" in r.lower() or "exercise" in r.lower() for r in recs)
+
+    def test_imperial_jacket_threshold(self):
+        from bom_clima.formatters import generate_recommendations
+        dados = {
+            "current": {"temperature_2m": 50, "uv_index": 2, "wind_speed_10m": 5, "visibility": 10000},
+            "daily": {"precipitation_probability_max": [10]},
+        }
+        recs = generate_recommendations(dados, {"unit_system": "imperial"})
+        assert any("jacket" in r.lower() or "casaco" in r.lower() for r in recs)
 
 
 class TestDetectExtremes:
@@ -832,12 +916,69 @@ class TestDetectExtremes:
         extremes = detect_extremes(dados)
         assert len(extremes) == 0
 
+    def test_ignores_past_cape(self):
+        from bom_clima.formatters import detect_extremes
+        dados = {
+            "current": {"time": "2026-08-12T16:00", "temperature_2m": 22, "uv_index": 3},
+            "daily": {
+                "temperature_2m_max": [25],
+                "temperature_2m_min": [15],
+                "precipitation_sum": [0],
+            },
+            "hourly": {
+                "time": ["2026-08-12T10:00", "2026-08-12T18:00"],
+                "cape": [2000, 100],
+            },
+        }
+        extremes = detect_extremes(dados)
+        assert len(extremes) == 0
+
+    def test_imperial_no_false_heat(self):
+        from bom_clima.formatters import detect_extremes
+        dados = {
+            "current": {"temperature_2m": 80, "uv_index": 3, "wind_speed_10m": 10},
+            "daily": {
+                "temperature_2m_max": [85],
+                "temperature_2m_min": [60],
+                "precipitation_sum": [0],
+            },
+            "hourly": {"cape": [0]},
+        }
+        extremes = detect_extremes(dados, unit_system="imperial")
+        assert len(extremes) == 0
+
+    def test_imperial_heat_at_100f(self):
+        from bom_clima.formatters import detect_extremes
+        dados = {
+            "current": {"temperature_2m": 90, "uv_index": 3, "wind_speed_10m": 10},
+            "daily": {
+                "temperature_2m_max": [100],
+                "temperature_2m_min": [70],
+                "precipitation_sum": [0],
+            },
+            "hourly": {"cape": [0]},
+        }
+        extremes = detect_extremes(dados, unit_system="imperial")
+        assert any("heat" in e.lower() or "calor" in e.lower() for e in extremes)
+
 
 class TestRainWindowSummary:
-    def test_no_rain(self, mock_weather_response):
+    def test_detects_rain_window(self, mock_weather_response):
         from bom_clima.formatters import rain_window_summary
         result = rain_window_summary(mock_weather_response)
-        assert len(result) == 0
+        assert len(result) == 1
+        assert "17:00" in result[0]
+
+    def test_no_rain_windows(self):
+        from bom_clima.formatters import rain_window_summary
+        dados = {
+            "current": {"time": "2026-04-29T14:00"},
+            "hourly": {
+                "time": ["2026-04-29T15:00", "2026-04-29T16:00"],
+                "precipitation_probability": [5, 10],
+            },
+        }
+        assert rain_window_summary(dados) == []
 
 
 class TestScoreDays:
@@ -880,6 +1021,7 @@ class TestScoreDays:
 # ---------------------------------------------------------------------------
 
 import argparse
+import itertools
 
 ALL_BOOLEAN_FLAGS = [
     "--detect", "--compare", "--alerts", "--aqi", "--imperial",
@@ -911,8 +1053,37 @@ def _build_all_pairs():
     return pairs
 
 
-def _combo_id(args):
-    return "+".join(a.lstrip("-").replace("-", "_") for a in args)
+
+
+def _build_n_way_combos(n):
+    all_args = [(flag,) for flag in ALL_BOOLEAN_FLAGS]
+    all_args += [(flag, val) for flag, val in ALL_VALUE_ARGS]
+    combos = []
+    for combo in itertools.combinations(all_args, n):
+        flat = []
+        for item in combo:
+            flat.extend(item)
+        combos.append(flat)
+    return combos
+
+
+TRIPLE_COMBOS = _build_n_way_combos(3)
+
+EDGE_VALUE_COMBOS = [
+    ["--days", "0"],
+    ["--days", "-1"],
+    ["--days", "15"],
+    ["--days", "16"],
+    ["--hours", "0"],
+    ["--hours", "24"],
+    ["--export", "json,csv,yaml,xml"],
+    ["--export", "bogus"],
+    ["--config-set", "forecast_days=7"],
+    ["--config-set", "forecast_days=100"],
+    ["--config-set", "lang=pt"],
+    ["--lang", "es"],
+    ["--lang", "pt"],
+]
 
 
 _FAKE_WEATHER = {
@@ -976,20 +1147,18 @@ _FAKE_ALERTS = {
 
 
 class TestArgumentParsingCombinations:
-    """Ensure build_parser().parse_args() accepts all pairwise arg combinations."""
+    """Ensure build_parser().parse_args() accepts all argument combinations."""
 
-    @pytest.mark.parametrize(
-        "combo", _build_all_pairs(),
-        ids=[_combo_id(c) for c in _build_all_pairs()],
-    )
-    def test_parse_args_pair(self, combo):
+    def test_parse_all_argument_combinations(self):
         parser = build_parser()
-        ns = parser.parse_args(["sao paulo"] + combo)
-        assert isinstance(ns, argparse.Namespace)
+        combos = _build_all_pairs() + TRIPLE_COMBOS + EDGE_VALUE_COMBOS
+        for combo in combos:
+            ns = parser.parse_args(["sao paulo"] + combo)
+            assert isinstance(ns, argparse.Namespace)
 
 
 class TestArgumentMainCombinations:
-    """Ensure main() does not crash on any pairwise arg combination."""
+    """Ensure main() does not crash on any argument combination."""
 
     @pytest.fixture(autouse=True)
     def _setup_main_mocks(self, tmp_path):
@@ -1028,12 +1197,33 @@ class TestArgumentMainCombinations:
         for p in patches:
             p.stop()
 
-    @pytest.mark.parametrize(
-        "combo", _build_all_pairs(),
-        ids=[_combo_id(c) for c in _build_all_pairs()],
-    )
-    def test_main_combo(self, combo):
-        sys_args = ["bom-clima", "sao paulo"] + combo
+    def test_main_all_argument_combinations(self):
+        from bom_clima.cli import main
+
+        scenarios = [
+            (["sao paulo"], _build_all_pairs() + TRIPLE_COMBOS + EDGE_VALUE_COMBOS),
+            (["sao paulo, rio de janeiro"], _build_all_pairs() + EDGE_VALUE_COMBOS),
+        ]
+        for city, combos in scenarios:
+            for combo in combos:
+                argv = ["bom-clima"] + city + combo
+                with patch("sys.argv", argv):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+                    except Exception as exc:
+                        raise AssertionError(f"main() crashed for argv={argv!r}") from exc
+
+    def test_main_full_pipeline(self, tmp_path):
+        out = str(tmp_path / "weather")
+        sys_args = [
+            "bom-clima", "sao paulo, rio de janeiro",
+            "--compare", "--days", "7", "--hours", "12",
+            "--aqi", "--alerts", "--imperial", "--best-day",
+            "--vs-yesterday", "--verbose", "--no-cache",
+            "--export", "json", "--output", out,
+        ]
         with patch("sys.argv", sys_args):
             try:
                 from bom_clima.cli import main

@@ -1,6 +1,7 @@
 """CLI module for Bom Clima — argument parsing and main entry point."""
 
 import argparse
+import math
 import os
 import sys
 from typing import Any
@@ -19,7 +20,7 @@ from .display import (
     r_panel,
     r_print,
 )
-from .formatters import export_all_formats, score_days
+from .formatters import export_all_formats, score_days, today_index, unit_symbols
 from .history import add_history, load_history
 from .i18n import reset_lang_cache, set_lang, t
 
@@ -150,10 +151,10 @@ def show_history() -> None:
     for idx, entry in enumerate(reversed(history), 1):
         rows.append([
             str(idx),
-            entry["city"],
-            str(entry["lat"]),
-            str(entry["lon"]),
-            entry["when"][:16],
+            str(entry.get("city", "")),
+            str(entry.get("lat", "")),
+            str(entry.get("lon", "")),
+            str(entry.get("when", ""))[:16].replace("T", " "),
         ])
     from .display import r_table
     r_table(headers, rows, title=t("history_title"))
@@ -183,12 +184,29 @@ def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dic
                     continue
                 if v.lower() in ("true", "false"):
                     v = v.lower() == "true"
-                elif v.isdigit():
-                    v = int(v)
-                elif v.replace(".", "", 1).isdigit():
-                    v = float(v)
+                else:
+                    try:
+                        v = int(v)
+                    except ValueError:
+                        try:
+                            fv = float(v)
+                            if not math.isfinite(fv):
+                                print(f"Warning: invalid numeric value for '{k}': {v!r}")
+                                continue
+                            v = fv
+                        except ValueError:
+                            pass
                 cfg[k] = v
+                if k == "lang" and v in ("pt", "en", "es"):
+                    set_lang(v)
+                    reset_lang_cache()
                 save_config(cfg)
+    days_cfg = cfg.get("forecast_days")
+    if isinstance(days_cfg, (int, float)):
+        if math.isfinite(days_cfg):
+            cfg["forecast_days"] = max(1, min(int(days_cfg), 15))
+        else:
+            cfg["forecast_days"] = 5
     _set_colors_enabled(cfg.get("color", True))
     if args.config_show:
         labels = [f"{k}:" for k in cfg]
@@ -225,18 +243,20 @@ def _export_city_data(
     export_all_formats(dados, nome, export_fmt, dest)
 
 
-def _show_vs_yesterday(dados: dict) -> None:
+def _show_vs_yesterday(dados: dict, unit_system: str = "metric") -> None:
     daily = dados.get("daily", {})
     temps_max = daily.get("temperature_2m_max", [])
-    if len(temps_max) < 2:
+    idx = today_index(dados)
+    if idx < 1 or len(temps_max) <= idx:
         return
-    yesterday_max = temps_max[0]
-    today_max = temps_max[1]
+    yesterday_max = temps_max[idx - 1]
+    today_max = temps_max[idx]
     delta = round(today_max - yesterday_max, 1)
+    t_unit = unit_symbols(unit_system)[0]
     if delta > 0:
-        text = t("vs_warmer").format(delta=f"+{delta}")
+        text = t("vs_warmer").format(delta=f"+{delta}", unit=t_unit)
     elif delta < 0:
-        text = t("vs_colder").format(delta=delta)
+        text = t("vs_colder").format(delta=delta, unit=t_unit)
     else:
         text = t("vs_same")
     r_panel(text, title=t("vs_yesterday"))
@@ -312,7 +332,7 @@ def main() -> None:
             )
             display_weather(city_name, dados, cfg)
             if args.vs_yesterday:
-                _show_vs_yesterday(dados)
+                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city_name, loc["lat"], loc["lon"])
             if args.export:
                 export_all_formats(dados, city_name, args.export, args.output)
@@ -367,14 +387,14 @@ def main() -> None:
             sys.exit(1)
         display_weather(nome, dados, cfg, city_info=cidade_info)
         if args.best_day:
-            dias = score_days(dados)
+            dias = score_days(dados, unit_system=cfg.get("unit_system", "metric"))
             if dias:
                 dias.sort(key=lambda x: x[1], reverse=True)
                 headers = [t("tbl_date"), t("best_day_score")]
                 rows = [[d[0], f"{d[1]:.0f}"] for d in dias[:3]]
                 display_best_day(headers, rows, t("best_day"))
         if args.vs_yesterday:
-            _show_vs_yesterday(dados)
+            _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
         add_history(cities[0], cidade_info["latitude"], cidade_info["longitude"])
         if args.export:
             export_all_formats(dados, nome, args.export, args.output)
@@ -387,7 +407,7 @@ def main() -> None:
                 sys.exit(1)
             display_weather(nome, dados, cfg, city_info=cidade_info)
             if args.vs_yesterday:
-                _show_vs_yesterday(dados)
+                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city, cidade_info["latitude"], cidade_info["longitude"])
             if args.export:
                 _export_city_data(dados, nome, args.export, args.output)

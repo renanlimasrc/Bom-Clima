@@ -69,7 +69,9 @@ def fetch_weather_data(
     no_cache: bool = False,
     verbose: bool = False,
 ) -> dict:
-    cache_key = f"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{forecast_days}"
+    cache_key = (
+        f"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{include_alerts}_{past_days}_{forecast_days}"
+    )
     if not no_cache:
         cached = cache_get_weather(cache_key)
         if cached:
