@@ -18,7 +18,15 @@
 
 """Entry point for Bom Clima CLI weather application."""
 
+import contextlib
+import sys
+
 from bom_clima.cli import main
 
 if __name__ == "__main__":
+    # See bom-clima.py: Windows consoles default to a legacy code page and the
+    # cards do not fit in it.
+    for _stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
     main()

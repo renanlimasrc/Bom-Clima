@@ -1,3 +1,74 @@
+## [0.2.9] - 2026-10-10
+
+### Fixed
+- `--config-set` no longer persists one-shot flag overrides: a single
+  `bom-clima "sp" --imperial --days 3 --config-set color=true` used to save
+  imperial and 3 days as the permanent default.
+- `--config-set` validates values per key, so `history_limit=abc` no longer
+  breaks every later run with a TypeError, and `color=no` no longer persists a
+  truthy string.
+- A damaged `config.json` or `history.json` no longer crashes every command; a
+  corrupted history file is moved to `.corrupt` instead of being silently
+  overwritten.
+- City names, regions and cached history entries are escaped before reaching
+  Rich. Text containing `[` previously raised `MarkupError`, which is not a
+  `ValueError` and so escaped the CLI's error handling and printed a traceback.
+- The geocoding cache key includes the language, so `--lang en` no longer keeps
+  showing the pt place name for 7 days.
+- A failed air-quality request is no longer cached, so a transient outage no
+  longer makes `--aqi` report "N/A" for the next 30 minutes.
+- `--no-cache` no longer writes to the cache.
+- Responses of `{"error": true}` are no longer cached and no longer crash display.
+- The cache degrades to a miss on any SQLite error instead of aborting a run
+  whose weather was already fetched.
+- `wind_direction` handles negative angles; `score_days` stays within 0-100 and
+  tolerates `null` cells; the rain alert uses one day instead of the whole window.
+- Recommendations follow today's index instead of index 0, which was yesterday
+  under `--vs-yesterday`.
+- YAML and XML exports handle apostrophes and quotes in place names.
+- `-e pdf` exits non-zero, and `--output` without `--export` is no longer ignored.
+
+- The legacy-code-page stdout fix now lives in `main()` itself, so the
+  installed `bom-clima` console script (which never runs the
+  `bom-clima.py`/`__main__` shims) is covered too.
+- Non-object API payloads (HTTP 200 with a `null`/array body) raise ValueError
+  instead of being returned and cached as weather.
+- `--compare` with an invalid export format exits non-zero like the
+  single-city path does.
+- `export_all_formats` no longer relies on `assert` for control flow, so
+  `python -O` keeps working.
+- Cache rows with a NULL timestamp or a non-dict payload are treated as a miss
+  instead of raising TypeError.
+
+- `--lang` (and the `lang` key in `config.json`, previously ignored) is now
+  resolved before the argument parser is built, so `--lang pt --help` and the
+  validation errors are printed in the requested language.
+- `--no-color` now applies to `--help` as well, and the Rich console no longer
+  forces terminal mode, so redirected output and pipes are free of ANSI escapes
+  and `NO_COLOR` is honoured.
+- `--best-day` and `--vs-yesterday` are no longer ignored by `--compare`.
+- `--compare` keeps and displays the cities that resolved; a failing city is
+  reported on stderr and only fails the run when nothing resolved.
+- `city_default` is split on commas like the CLI positional, so `--compare`
+  works with a configured default city.
+- The moon phase uses the real reference instant (2000-01-06 18:14 UTC) instead
+  of midnight of that day, and follows the queried location's date rather than
+  the machine clock.
+- Colour thresholds compare with `>=`: exactly 28C was rendering green and 20%
+  rain green, instead of yellow.
+- The temperature bar renders between "Min today" and "Humidity" instead of
+  above the city name.
+- Locale detection follows POSIX precedence (LC_ALL > LC_MESSAGES > LANGUAGE >
+  LANG), accepts regional codes and a BOM in the `lang` file, and no longer
+  mutates the process-wide LC_MESSAGES locale as a side effect.
+- `mypy bom_clima/` runs again (the pinned `python_version` made it abort) and
+  reports no errors.
+
+### Removed
+- `--alerts`. It called `https://api.open-meteo.com/v1/warnings`, which returns
+  HTTP 404; there is no public severe-weather endpoint in the Open-Meteo API, so
+  the flag could never report anything. Extreme weather is still detected locally.
+
 # Changelog
 
 All notable changes to Bom Clima will be documented in this file.

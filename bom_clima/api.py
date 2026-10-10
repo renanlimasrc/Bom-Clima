@@ -8,7 +8,6 @@ import requests
 from .cache import cache_get_geo, cache_get_weather, cache_set_geo, cache_set_weather
 from .constants import (
     BASE_URL_AIR,
-    BASE_URL_ALERTS,
     BASE_URL_GEO,
     BASE_URL_WEATHER,
     HEADERS,
@@ -16,6 +15,8 @@ from .constants import (
     TIMEOUT,
 )
 from .i18n import t
+
+MAX_FORECAST_DAYS = 16
 
 
 def detect_location() -> dict | None:
@@ -27,8 +28,11 @@ def detect_location() -> dict | None:
             return {
                 "lat": data["latitude"],
                 "lon": data["longitude"],
-                "city": data.get("city", ""),
-                "country": data.get("country_name", data.get("country", "")),
+                # ipapi.co sends an explicit null for VPN, proxy and carrier
+                # ranges. .get(k, "") does not catch that, and the caller
+                # concatenates these values into a string.
+                "city": data.get("city") or "",
+                "country": data.get("country_name") or data.get("country") or "",
             }
     except (requests.RequestException, json.JSONDecodeError):
         pass
@@ -41,20 +45,27 @@ def search_city(nome: str, no_cache: bool = False) -> dict:
     city_name = nome.strip() if nome else ""
     if not city_name:
         raise ValueError(t("empty_city"))
+    lang = _current_lang()
+    # The geocoding API localises place names, so the language belongs in the
+    # cache key. Without it, running `bom-clima berlin` under a pt locale pins
+    # "Berlim, Alemanha" for the full 7-day TTL, --lang en notwithstanding.
+    cache_key = f"{lang}:{city_name.casefold()}"
     if not no_cache:
-        cached = cache_get_geo(city_name)
+        cached = cache_get_geo(cache_key)
         if cached:
             return cached
-    params: dict[str, str | int] = {"name": city_name, "count": 1, "language": _current_lang(), "format": "json"}
+    params: dict[str, str | int] = {"name": city_name, "count": 1, "language": lang, "format": "json"}
     try:
         res = requests.get(BASE_URL_GEO, params=params, headers=HEADERS, timeout=TIMEOUT)
         res.raise_for_status()
         data = res.json()
         result: dict = data["results"][0]
         if not no_cache:
-            cache_set_geo(city_name, result)
+            cache_set_geo(cache_key, result)
         return result
-    except (requests.RequestException, KeyError, IndexError) as exc:
+    except (requests.RequestException, KeyError, IndexError, TypeError) as exc:
+        # TypeError: the API answers {"results": null} rather than [] when it
+        # finds nothing for some queries.
         raise ValueError(t("city_not_found").format(name=city_name)) from exc
 
 
@@ -62,16 +73,17 @@ def fetch_weather_data(
     lat: float,
     lon: float,
     unit_system: str = "metric",
-    include_alerts: bool = False,
     include_aqi: bool = False,
     forecast_days: int = 5,
     past_days: int = 0,
     no_cache: bool = False,
     verbose: bool = False,
 ) -> dict:
-    cache_key = (
-        f"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{include_alerts}_{past_days}_{forecast_days}"
-    )
+    # Clamp here as well as in the CLI: this is a public entry point and
+    # forecast_days=0 comes back as HTTP 200 with an empty "daily" array.
+    forecast_days = max(1, min(int(forecast_days), MAX_FORECAST_DAYS))
+    past_days = max(0, int(past_days))
+    cache_key = f"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{past_days}_{forecast_days}"
     if not no_cache:
         cached = cache_get_weather(cache_key)
         if cached:
@@ -117,6 +129,16 @@ def fetch_weather_data(
     except requests.RequestException as exc:
         raise ValueError(t("weather_error")) from exc
 
+    # Open-Meteo answers HTTP 200 with {"error": true, "reason": ...} for bad
+    # coordinates, and an intercepting proxy can do the same. Caching that would
+    # keep every later run failing for the whole TTL, and display has no
+    # "current" key to read. The isinstance guard matters: `"current" not in`
+    # a null/list payload raises TypeError, which the callers' `except
+    # ValueError` would not catch.
+    if not isinstance(result, dict) or "current" not in result or "daily" not in result:
+        raise ValueError(t("weather_error"))
+
+    complete = True
     if include_aqi:
         try:
             air_params: dict[str, str | float] = {
@@ -132,22 +154,14 @@ def fetch_weather_data(
             if verbose:
                 print(f"[debug] AQI fetch failed: {exc}")
             result["air_quality"] = {}
+            complete = False
 
-    if include_alerts:
-        try:
-            alert_params: dict[str, str | float] = {"latitude": lat, "longitude": lon, "format": "json"}
-            alert_res = requests.get(
-                BASE_URL_ALERTS,
-                params=alert_params,
-                headers=HEADERS,
-                timeout=TIMEOUT,
-            )
-            alert_res.raise_for_status()
-            result["alerts"] = alert_res.json().get("alerts", [])
-        except requests.RequestException as exc:
-            if verbose:
-                print(f"[debug] Alerts fetch failed: {exc}")
-            result["alerts"] = []
-
-    cache_set_weather(cache_key, result)
+    if not no_cache:
+        # A response missing the optional air-quality block is a transient
+        # outage, not a result. Storing it would make --aqi report "N/A" for
+        # the next 30 minutes even once the network recovered.
+        if complete:
+            cache_set_weather(cache_key, result)
+        elif verbose:
+            print(f"[debug] not caching {cache_key}: incomplete response")
     return result

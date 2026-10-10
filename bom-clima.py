@@ -18,7 +18,16 @@
 
 """Backward-compatible entry point — delegates to bom_clima.cli:main (Bom Clima)."""
 
+import contextlib
+import sys
+
 from bom_clima.cli import main
 
 if __name__ == "__main__":
+    # Windows consoles still default to a legacy code page (cp1252/cp437) and the
+    # cards are full of emoji, arrows and weather glyphs. Without this even
+    # `--version` dies with UnicodeEncodeError on a supported platform.
+    for _stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
     main()

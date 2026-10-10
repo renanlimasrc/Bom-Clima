@@ -1,7 +1,7 @@
 """CLI module for Bom Clima — argument parsing and main entry point."""
 
 import argparse
-import math
+import contextlib
 import os
 import sys
 from typing import Any
@@ -9,7 +9,7 @@ from typing import Any
 from . import __version__
 from .api import detect_location, fetch_weather_data, search_city
 from .cache import cache_cleanup
-from .config import load_config, save_config
+from .config import _sanitize, load_config, save_config
 from .constants import VALID_CONFIG_KEYS, ensure_app_dir
 from .display import (
     HAS_RICH,
@@ -17,12 +17,15 @@ from .display import (
     display_best_day,
     display_comparison,
     display_weather,
+    r_escape,
     r_panel,
     r_print,
 )
 from .formatters import export_all_formats, score_days, today_index, unit_symbols
 from .history import add_history, load_history
-from .i18n import reset_lang_cache, set_lang, t
+from .i18n import set_lang, t
+
+_INT_CONFIG_KEYS = ("forecast_days", "forecast_hours", "history_limit")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
     disp = p.add_argument_group(t("grp_display"))
     disp.add_argument("-D", "--days", type=int, default=None, help=t("help_days") + " (max: 15)")
     disp.add_argument("-H", "--hours", type=int, default=None, help=t("help_hours"))
-    disp.add_argument("-a", "--alerts", action="store_true", help=t("help_alerts"))
     disp.add_argument("-q", "--aqi", action="store_true", help=t("help_aqi"))
     disp.add_argument("-i", "--imperial", action="store_true", help=t("help_imperial"))
     disp.add_argument("-n", "--no-color", action="store_true", help=t("help_no_color"))
@@ -89,7 +91,6 @@ def show_help() -> None:
     lines.append(f"  \U0001f4ca {t('help_display')}")
     lines.append(f"    -D, --days N      {t('help_display_days')}")
     lines.append(f"    -H, --hours N     {t('help_display_hours')}")
-    lines.append(f"    -a, --alerts      {t('help_display_alerts')}")
     lines.append(f"    -q, --aqi         {t('help_display_aqi')}")
     lines.append(f"    -i, --imperial    {t('help_display_imperial')}")
     lines.append(f"    -n, --no-color    {t('help_display_color')}")
@@ -149,9 +150,11 @@ def show_history() -> None:
     headers = ["#", t("hist_city"), t("hist_lat"), t("hist_lon"), t("hist_when")]
     rows: list[list[str]] = []
     for idx, entry in enumerate(reversed(history), 1):
+        # history.json is a file the user can edit by hand; its city string goes
+        # straight into a Rich table, where '[' would be read as a markup tag.
         rows.append([
             str(idx),
-            str(entry.get("city", "")),
+            r_escape(entry.get("city", "")),
             str(entry.get("lat", "")),
             str(entry.get("lon", "")),
             str(entry.get("when", ""))[:16].replace("T", " "),
@@ -160,7 +163,79 @@ def show_history() -> None:
     r_table(headers, rows, title=t("history_title"))
 
 
+def _coerce_config_value(key: str, raw: str) -> Any:
+    """Convert a --config-set string into the type its key expects.
+
+    Raises ValueError for anything the key cannot hold. This check is what stops
+    a bad value from reaching config.json: history_limit, forecast_days and
+    forecast_hours are read back as numbers, and a string there crashes every
+    later run, not just the one that set it.
+    """
+    if key == "lang" and raw.lower() in ("null", "none", ""):
+        return None
+    if raw.lower() in ("true", "false"):
+        value: Any = raw.lower() == "true"
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            try:
+                value = float(raw)
+            except ValueError:
+                value = raw
+
+    if key == "color":
+        if not isinstance(value, bool):
+            raise ValueError("expected true or false")
+    elif key in _INT_CONFIG_KEYS:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("expected an integer")
+        if key == "forecast_days" and not 1 <= value <= 15:
+            raise ValueError("expected an integer between 1 and 15")
+        if key == "forecast_hours" and value < 1:
+            raise ValueError("expected an integer of at least 1")
+        if key == "history_limit" and value < 0:
+            raise ValueError("expected an integer of at least 0")
+    elif key == "unit_system" and value not in ("metric", "imperial"):
+        raise ValueError("expected metric or imperial")
+    elif key == "lang" and value not in ("pt", "en", "es", None):
+        raise ValueError("expected pt, en, es or null")
+    return value
+
+
 def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    # "lang" is documented in DEFAULT_CONFIG but nothing read it, so a value
+    # set there (or by hand) had no effect at all.
+    if cfg.get("lang") in ("pt", "en", "es"):
+        set_lang(cfg["lang"])
+
+    pending: dict[str, Any] = {}
+    if args.config_set:
+        for pair in args.config_set:
+            if "=" not in pair:
+                r_print(t("config_set_invalid").format(pair=pair))
+                continue
+            key, value = pair.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key not in VALID_CONFIG_KEYS:
+                r_print(t("config_key_unknown").format(key=key))
+                continue
+            try:
+                pending[key] = _coerce_config_value(key, value)
+            except ValueError as exc:
+                r_print(t("config_value_invalid").format(key=key, reason=str(exc)))
+
+    if pending:
+        # Persist only what --config-set asked for. Saving `cfg` here would also
+        # persist the one-shot flag overrides applied below, so a single
+        # `--imperial --days 3 --config-set color=true` would silently make
+        # imperial and 3 days the permanent default.
+        save_config({**load_config(), **pending})
+        cfg.update(pending)
+        if pending.get("lang") in ("pt", "en", "es"):
+            set_lang(pending["lang"])
+
     if args.imperial:
         cfg["unit_system"] = "imperial"
     if args.hours is not None:
@@ -171,49 +246,15 @@ def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dic
         cfg["color"] = False
     if args.lang:
         set_lang(args.lang)
-        cfg["lang"] = args.lang
-        reset_lang_cache()
-    if args.config_set:
-        for pair in args.config_set:
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip("'\"")
-                if k not in VALID_CONFIG_KEYS:
-                    print(f"Warning: unknown config key '{k}'")
-                    continue
-                if v.lower() in ("true", "false"):
-                    v = v.lower() == "true"
-                else:
-                    try:
-                        v = int(v)
-                    except ValueError:
-                        try:
-                            fv = float(v)
-                            if not math.isfinite(fv):
-                                print(f"Warning: invalid numeric value for '{k}': {v!r}")
-                                continue
-                            v = fv
-                        except ValueError:
-                            pass
-                cfg[k] = v
-                if k == "lang" and v in ("pt", "en", "es"):
-                    set_lang(v)
-                    reset_lang_cache()
-                save_config(cfg)
-    days_cfg = cfg.get("forecast_days")
-    if isinstance(days_cfg, (int, float)):
-        if math.isfinite(days_cfg):
-            cfg["forecast_days"] = max(1, min(int(days_cfg), 15))
-        else:
-            cfg["forecast_days"] = 5
+
+    cfg = _sanitize(cfg)
     _set_colors_enabled(cfg.get("color", True))
     if args.config_show:
-        labels = [f"{k}:" for k in cfg]
-        max_w = max(len(l) for l in labels) if labels else 0
+        labels = [f"{key}:" for key in cfg]
+        max_w = max((len(lbl) for lbl in labels), default=0)
         content = "\n".join(
-            f"  {l}{' ' * (max_w - len(l))} {v}"
-            for l, v in zip(labels, cfg.values())
+            f"  {lbl}{' ' * (max_w - len(lbl))} {value}"
+            for lbl, value in zip(labels, cfg.values(), strict=True)
         )
         r_panel(content, title=t("config_title"))
         sys.exit(0)
@@ -232,15 +273,44 @@ def _export_city_data(
     nome: str,
     export_fmt: str,
     output: str | None,
-) -> None:
+) -> int:
     """Export weather data for a city, handling unique filenames for multi-city exports."""
     if output:
         base, ext = os.path.splitext(output)
-        safe_nome = nome.replace(" ", "_").replace("/", "_")
+        safe_nome = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in nome)[:80]
         dest = f"{base}_{safe_nome}{ext or '.json'}"
     else:
         dest = None
-    export_all_formats(dados, nome, export_fmt, dest)
+    return export_all_formats(dados, nome, export_fmt, dest)
+
+
+def _do_export(dados: dict, nome: str, fmt: str, output: str | None, per_city: bool) -> None:
+    """Run an export and exit non-zero when nothing could be written.
+
+    `-e pdf` used to print "invalid format" and exit 0, so scripts could not
+    tell a failed export from a successful one.
+    """
+    written = (
+        _export_city_data(dados, nome, fmt, output)
+        if per_city
+        else export_all_formats(dados, nome, fmt, output)
+    )
+    if not written:
+        sys.exit(1)
+
+
+def _show_best_day(dados: dict, cfg: dict[str, Any], args: argparse.Namespace) -> None:
+    """Render the best-day card. Available on every fetch path, not just the
+    single-city one, where --best-day used to be silently ignored."""
+    if not getattr(args, "best_day", False):
+        return
+    dias = score_days(dados, unit_system=cfg.get("unit_system", "metric"))
+    if not dias:
+        return
+    dias.sort(key=lambda x: x[1], reverse=True)
+    headers = [t("tbl_date"), t("best_day_score")]
+    rows = [[d[0], f"{d[1]:.0f}"] for d in dias[:3]]
+    display_best_day(headers, rows, t("best_day"))
 
 
 def _show_vs_yesterday(dados: dict, unit_system: str = "metric") -> None:
@@ -273,7 +343,6 @@ def _fetch_and_display(
         cidade_info["latitude"],
         cidade_info["longitude"],
         unit_system=cfg.get("unit_system", "metric"),
-        include_alerts=args.alerts,
         include_aqi=args.aqi,
         forecast_days=cfg.get("forecast_days", 5),
         past_days=past_days,
@@ -284,10 +353,51 @@ def _fetch_and_display(
     return nome, dados, cidade_info
 
 
+def _resolve_lang(cfg: dict[str, Any], argv: list[str] | None = None) -> None:
+    """Settle the language before the parser is built.
+
+    build_parser() calls t() for every help string and the validation messages
+    call t() too, so deciding the language later meant that `--lang pt --help`
+    and `--lang pt --days 0` both printed English. The `lang` key in
+    config.json is documented but used to be ignored entirely.
+
+    The flag wins over the config value.
+    """
+    tokens = sys.argv[1:] if argv is None else argv
+    flag: str | None = None
+    for i, token in enumerate(tokens):
+        value = None
+        if token.startswith("--lang="):
+            value = token.split("=", 1)[1]
+        elif token in ("--lang", "-l") and i + 1 < len(tokens):
+            value = tokens[i + 1]
+        if value in ("pt", "en", "es"):
+            flag = value
+            break
+
+    configured = cfg.get("lang")
+    chosen = flag or (configured if configured in ("pt", "en", "es") else None)
+    if chosen:
+        set_lang(chosen)
+
+
 def main() -> None:
+    # Windows consoles still default to a legacy code page (cp1252/cp437) and
+    # the cards are full of emoji and weather glyphs. This lives here rather
+    # than only in the bom-clima.py / __main__ shims because the installed
+    # console script ([project.scripts] bom-clima) calls main() directly and
+    # would otherwise still die with UnicodeEncodeError.
+    for _stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
     ensure_app_dir()
+    cfg = load_config()
+    _resolve_lang(cfg)
     parser = build_parser()
     args = parser.parse_args()
+
+    # Settle colour before anything renders, --help included.
+    _set_colors_enabled(cfg.get("color", True) and not args.no_color)
 
     if args.version:
         print(f"\U0001f324\ufe0f  Bom Clima v{__version__}")
@@ -300,8 +410,13 @@ def main() -> None:
     _validate_positive(args.days, "--days")
     _validate_positive(args.hours, "--hours")
 
-    cfg = load_config()
     cfg = apply_config_overrides(cfg, args)
+
+    if args.output and not args.export:
+        # Previously ignored in silence: the forecast rendered, no file appeared
+        # and the exit code stayed 0.
+        r_print(t("output_without_export"))
+        sys.exit(1)
 
     if args.history:
         show_history()
@@ -320,22 +435,26 @@ def main() -> None:
                 city_name += f", {loc['country']}"
             print(f"\U0001f4cd {t('detect_label')}: {city_name} (lat: {loc['lat']}, lon: {loc['lon']})")
             past_days = 1 if getattr(args, "vs_yesterday", False) else 0
-            dados = fetch_weather_data(
-                loc["lat"], loc["lon"],
-                unit_system=cfg.get("unit_system", "metric"),
-                include_alerts=args.alerts,
-                include_aqi=args.aqi,
-                forecast_days=cfg.get("forecast_days", 5),
-                past_days=past_days,
-                no_cache=args.no_cache,
-                verbose=args.verbose,
-            )
+            try:
+                dados = fetch_weather_data(
+                    loc["lat"], loc["lon"],
+                    unit_system=cfg.get("unit_system", "metric"),
+                    include_aqi=args.aqi,
+                    forecast_days=cfg.get("forecast_days", 5),
+                    past_days=past_days,
+                    no_cache=args.no_cache,
+                    verbose=args.verbose,
+                )
+            except ValueError as e:
+                print(f"\n{e}\n")
+                sys.exit(1)
             display_weather(city_name, dados, cfg)
+            _show_best_day(dados, cfg, args)
             if args.vs_yesterday:
                 _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city_name, loc["lat"], loc["lon"])
             if args.export:
-                export_all_formats(dados, city_name, args.export, args.output)
+                _do_export(dados, city_name, args.export, args.output, per_city=False)
             sys.exit(0)
         else:
             print(f"\u26a0\ufe0f {t('detect_fail')}")
@@ -349,7 +468,9 @@ def main() -> None:
     else:
         default = cfg.get("city_default")
         if default and isinstance(default, str) and default.strip():
-            cities = [default.strip()]
+            # Same comma splitting as the CLI positional: without it,
+            # city_default="a,b" produced one geocoding query for "a,b".
+            cities = [c.strip() for c in default.split(",") if c.strip()]
         else:
             prompt = t("enter_city")
             try:
@@ -367,18 +488,32 @@ def main() -> None:
 
     if args.compare and len(cities) > 1:
         resultados: list[tuple[str, dict, dict[str, Any], dict | None]] = []
+        falhas: list[str] = []
         for city in cities:
             try:
                 nome, dados, cidade_info = _fetch_and_display(city, cfg, args)
                 resultados.append((nome, dados, cfg, cidade_info))
                 add_history(city, cidade_info["latitude"], cidade_info["longitude"])
             except ValueError as e:
-                print(f"\n{e}\n")
-                sys.exit(1)
+                falhas.append(f"{city}: {e}")
+        if not resultados:
+            print("\n".join(falhas))
+            sys.exit(1)
         display_comparison(resultados)
+        # These flags were documented as city-agnostic but only the multi-city
+        # branch rendered them.
+        if args.vs_yesterday:
+            for _nome, dados, _cfg, _info in resultados:
+                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
+        for _nome, dados, _cfg, _info in resultados:
+            _show_best_day(dados, cfg, args)
         if args.export:
             for nome, dados, _, _ in resultados:
-                _export_city_data(dados, nome, args.export, args.output)
+                _do_export(dados, nome, args.export, args.output, per_city=True)
+        if falhas:
+            # Partial success is worth showing; only fail the run if nothing worked.
+            print("\n".join(falhas), file=sys.stderr)
+            sys.exit(1)
     elif len(cities) == 1:
         try:
             nome, dados, cidade_info = _fetch_and_display(cities[0], cfg, args)
@@ -386,18 +521,12 @@ def main() -> None:
             print(f"\n{e}\n")
             sys.exit(1)
         display_weather(nome, dados, cfg, city_info=cidade_info)
-        if args.best_day:
-            dias = score_days(dados, unit_system=cfg.get("unit_system", "metric"))
-            if dias:
-                dias.sort(key=lambda x: x[1], reverse=True)
-                headers = [t("tbl_date"), t("best_day_score")]
-                rows = [[d[0], f"{d[1]:.0f}"] for d in dias[:3]]
-                display_best_day(headers, rows, t("best_day"))
+        _show_best_day(dados, cfg, args)
         if args.vs_yesterday:
             _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
         add_history(cities[0], cidade_info["latitude"], cidade_info["longitude"])
         if args.export:
-            export_all_formats(dados, nome, args.export, args.output)
+            _do_export(dados, nome, args.export, args.output, per_city=False)
     else:
         for city in cities:
             try:
@@ -406,8 +535,9 @@ def main() -> None:
                 print(f"\n{e}\n")
                 sys.exit(1)
             display_weather(nome, dados, cfg, city_info=cidade_info)
+            _show_best_day(dados, cfg, args)
             if args.vs_yesterday:
                 _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city, cidade_info["latitude"], cidade_info["longitude"])
             if args.export:
-                _export_city_data(dados, nome, args.export, args.output)
+                _do_export(dados, nome, args.export, args.output, per_city=True)

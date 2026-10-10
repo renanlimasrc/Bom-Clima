@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.2.8-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.2.9-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -16,7 +16,11 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 - **Unit systems** — Metric (°C, km/h, mm) and Imperial (°F, mph, in) support
 - **Air Quality Index (AQI)** — PM2.5, US AQI with quality labels (Good to Very Poor)
 - **Moon phases** — Current moon phase with emoji icons (New, Waxing, Full, Waning)
-- **Weather alerts** — Severe weather warnings when available (thunderstorms, heavy rain, etc.)
+
+> **Note:** the `--alerts` flag was removed. It called
+> `https://api.open-meteo.com/v1/warnings`, which returns HTTP 404 — there is no
+> public severe-weather endpoint in the Open-Meteo API, so the flag could never
+> report an alert. Extreme weather is still detected locally (see below).
 
 ### Smart Insights
 - **Smart recommendations** — Context-aware advice: umbrella, sunscreen, jacket, light clothes, outdoor exercise, wind care, fog driving
@@ -109,9 +113,6 @@ bom-clima --imperial new york
 # Include air quality (PM2.5, US AQI)
 bom-clima sao paulo --aqi
 
-# Include weather alerts
-bom-clima miami --alerts
-
 # Best day for outdoor activities
 bom-clima sao paulo --best-day
 
@@ -171,7 +172,6 @@ bom-clima --history
 | `--compare` | Compare cities side by side |
 | `--days N` | Number of days in forecast (default: 5, max: 15) |
 | `--hours N` | Number of hours in hourly forecast (default: 6) |
-| `--alerts` | Include weather alerts |
 | `--aqi` | Include air quality (PM2.5, US AQI) |
 | `--imperial` | Use imperial units (°F, mph, in) |
 | `--no-color` | Disable colored output |
@@ -287,7 +287,7 @@ cd Bom-Clima
 python -m pytest tests/test_bom_clima.py -v
 ```
 
-All 127 tests should pass
+All 195 tests should pass
 
 ## 📜 License
 

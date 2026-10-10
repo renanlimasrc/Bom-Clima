@@ -47,25 +47,36 @@ def _current_lang() -> str:
         return _current_lang_cache
     if LANG_FILE.exists():
         try:
-            lang = LANG_FILE.read_text().strip()
-            if lang in _SUPPORTED_LANGS:
-                _current_lang_cache = lang
-                return lang
-        except OSError:
+            # Editors on Windows write a BOM, and users type regional codes.
+            raw = LANG_FILE.read_text("utf-8").lstrip("﻿").strip()
+            if raw[:2] in _SUPPORTED_LANGS:
+                _current_lang_cache = raw[:2]
+                return _current_lang_cache
+        except (OSError, UnicodeDecodeError):
             pass
-    env = os.environ.get("LANG", "")
+    # POSIX precedence is LC_ALL > LC_MESSAGES > LANG. Reading only $LANG
+    # ignored a user's explicit LC_ALL, and LC_ALL=C with LANG=pt_BR is common.
+    env = (
+        os.environ.get("LC_ALL")
+        or os.environ.get("LC_MESSAGES")
+        or os.environ.get("LANGUAGE")
+        or os.environ.get("LANG")
+        or ""
+    )
     if env:
-        code = env.split(".")[0][:2]
+        code = env.split(".")[0].split("_")[0][:2]
         if code in _SUPPORTED_LANGS:
             _current_lang_cache = code
             return code
     try:
-        loc = locale.setlocale(locale.LC_MESSAGES, "")
-        code = loc.split(".")[0][:2]
+        # Read-only: locale.setlocale() here mutated LC_MESSAGES for the whole
+        # process as a side effect of the first t() call.
+        loc = locale.getlocale(locale.LC_MESSAGES)
+        code = (loc[0] or "").split("_")[0][:2]
         if code in _SUPPORTED_LANGS:
             _current_lang_cache = code
             return code
-    except (locale.Error, ValueError):
+    except (locale.Error, ValueError, TypeError):
         pass
     if os.name == "nt":
         try:
@@ -95,9 +106,16 @@ def _current_lang() -> str:
 
 def set_lang(lang: str) -> None:
     global _current_lang_cache
-    if lang in _SUPPORTED_LANGS:
-        LANG_FILE.write_text(lang)
-        _current_lang_cache = lang
+    if lang not in _SUPPORTED_LANGS:
+        return
+    _current_lang_cache = lang
+    try:
+        LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LANG_FILE.write_text(lang, "utf-8")
+    except OSError:
+        # The choice still applies to this run; only persistence failed, and a
+        # read-only $HOME must not abort the command.
+        pass
 
 
 def reset_lang_cache() -> None:

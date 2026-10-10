@@ -2,9 +2,11 @@
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from .formatters import (
+    _at,
+    _num,
     detect_extremes,
     dewpoint_comfort,
     display_width,
@@ -26,10 +28,14 @@ from .i18n import _current_lang, t
 try:
     from rich.columns import Columns
     from rich.console import Console
+    from rich.markup import escape as _markup_escape
     from rich.panel import Panel
     from rich.table import Table
+    from rich.text import Text
 
-    console: Console | None = Console(force_terminal=True)
+    # force_terminal=None lets Rich auto-detect: forcing it on wrote ANSI escapes
+    # into redirected files and pipes, and ignored the NO_COLOR convention.
+    console: Console | None = Console(force_terminal=None, no_color=None)
     HAS_RICH = True
 except ImportError:
     console = None
@@ -50,11 +56,33 @@ def _style_if_active(style: str) -> str | None:
     return style if _colors_active() else None
 
 
+def r_escape(text: object) -> str:
+    """Neutralise Rich markup in text that did not come from our own code.
+
+    City names, admin regions and cache/history files can contain '[' and ']',
+    which Rich parses as markup tags. Unescaped they either crash with
+    MarkupError -- not a ValueError, so it escapes the CLI's error handling --
+    or silently inject styling into the card.
+    """
+    if not HAS_RICH:
+        return str(text)
+    return _markup_escape(str(text))
+
+
+def r_plain(text: object) -> "Text | str":
+    """Render text literally, with no markup interpretation at all."""
+    if not HAS_RICH:
+        return str(text)
+    return Text(str(text))
+
+
 def _set_colors_enabled(enabled: bool) -> None:
     global _COLORS_ENABLED
     _COLORS_ENABLED = enabled
     if console is not None:
-        console.no_color = None if enabled else True
+        # None means "auto", which is what lets Rich honour NO_COLOR. Rich's own
+        # attribute is typed as a plain bool, hence the cast.
+        console.no_color = cast(bool, True if not enabled else None)
 
 
 def r_print(text_str: str) -> None:
@@ -68,7 +96,7 @@ def r_print(text_str: str) -> None:
 def r_rule(title: str, char: str = "=") -> None:
     if _use_rich():
         assert console is not None
-        console.rule(f" {title} ", style=_style_if_active("bold blue"), characters=char)
+        console.rule(f" {title} ", style=_style_if_active("bold blue") or "", characters=char)
     else:
         sep = char * 44
         print(f"\n{sep}")
@@ -79,7 +107,9 @@ def r_rule(title: str, char: str = "=") -> None:
 def r_panel(content: str, title: str = "") -> None:
     if _use_rich():
         assert console is not None
-        console.print(Panel(content, title=title, border_style="cyan", expand=False, width=None))
+        # Titles carry city names straight from the geocoding API, so they are
+        # rendered as literal Text rather than parsed as markup.
+        console.print(Panel(content, title=r_plain(title), border_style="cyan", expand=False, width=None))
     else:
         if title:
             r_rule(title)
@@ -128,7 +158,7 @@ def r_table(headers: list[str], rows: list[list[str]], title: str = "", show_hea
         assert console is not None
         table: Table | Panel = _build_rich_table(headers, rows, show_header=show_header)
         if title:
-            table = Panel(table, title=title, border_style="cyan", expand=False)
+            table = Panel(table, title=r_plain(title), border_style="cyan", expand=False)
         console.print(table)
     else:
         if title:
@@ -138,6 +168,10 @@ def r_table(headers: list[str], rows: list[list[str]], title: str = "", show_hea
 
 
 BEST_DAY_CARD_WIDTH = 40
+
+# Marker for the temperature bar, which is laid out unpadded at its own
+# position rather than as a normal label/value row.
+_BAR_SENTINEL = "\x00bar"
 
 
 def display_best_day(headers: list[str], rows: list[list[str]], title: str) -> None:
@@ -167,18 +201,19 @@ COLOR_RAIN = [(60, "red"), (20, "yellow"), (-1, "green")]
 def _colorize(text: str, val: float, steps: Sequence[tuple[float, str]]) -> str:
     if not _colors_active():
         return text
+    # >= on every step: with > the boundary value itself fell through to the
+    # next colour, so exactly 28C rendered green instead of yellow.
     for threshold, color in steps:
-        if val > threshold:
+        if val >= threshold:
             return f"[{color}]{text}[/{color}]"
     return text
 
 
 def _temp_color(val: float, unit_sym: str) -> str:
     text = f"{val}{unit_sym}"
+    # Thresholds are Celsius; imperial values arrive in Fahrenheit.
     compare = (val - 32) * 5 / 9 if unit_sym == "°F" else val
-    if _colors_active() and compare >= COLOR_TEMP[0][0]:
-        return f"[{COLOR_TEMP[0][1]}]{text}[/{COLOR_TEMP[0][1]}]"
-    return _colorize(text, compare, COLOR_TEMP[1:])
+    return _colorize(text, compare, COLOR_TEMP)
 
 
 def _rain_color(val: int | float) -> str:
@@ -213,17 +248,33 @@ def format_weather_block(
     wmo_code = atual.get("weather_code", 0)
     wmo_desc, _wmo_icon = get_wmo(wmo_code, lang)
 
-    location_str = nome
+    # Names from the geocoding API are interpolated into a Rich-rendered body,
+    # so they must be escaped or they get parsed as markup tags.
+    location_str = r_escape(nome)
     if city_info:
-        parts = [nome]
+        parts = [location_str]
         if city_info.get("admin1") and city_info["admin1"] != nome:
-            parts.append(city_info["admin1"])
+            parts.append(r_escape(city_info["admin1"]))
         if city_info.get("country"):
-            parts.append(city_info["country"])
+            parts.append(r_escape(city_info["country"]))
         location_str = ", ".join(parts)
 
     entries: list[tuple[str, str, str]] = []
     entries.append(("", location_str, ""))
+
+    # Right below the place name: the min/max bar is the day's shape at a
+    # glance, so it belongs at the top where the eye lands first.
+    t_now = _num(atual.get("temperature_2m"))
+    t_min = _num(_at(diario.get("temperature_2m_min"), idx))
+    t_max = _num(_at(diario.get("temperature_2m_max"), idx))
+    bar_line = _build_temp_bar(t_now, t_min, t_max, unit_sym)
+    if bar_line:
+        # _BAR_SENTINEL marks it for the layout pass: the bar carries its own
+        # indent and must not be padded like a label/value row. The old code
+        # jumped the queue via an `emoji == "  "` check instead, which put the
+        # bar ahead of the city name too.
+        entries.append(("", _BAR_SENTINEL, bar_line))
+
     try:
         dt_updated = datetime.fromisoformat(atual["time"])
         now_dt: datetime | None = dt_updated
@@ -236,15 +287,8 @@ def format_weather_block(
 
     entries.append(("", t("temperature"), f"{atual['temperature_2m']}{unit_sym}"))
     entries.append(("", t("feels_like"), f"{atual['apparent_temperature']}{unit_sym}"))
-    entries.append(("", t("max_today"), f"{diario['temperature_2m_max'][idx]}{unit_sym}"))
-    entries.append(("", t("min_today"), f"{diario['temperature_2m_min'][idx]}{unit_sym}"))
-
-    t_now = atual["temperature_2m"]
-    t_min = diario["temperature_2m_min"][idx]
-    t_max = diario["temperature_2m_max"][idx]
-    bar_line = _build_temp_bar(t_now, t_min, t_max, unit_sym)
-    if bar_line:
-        entries.append(("  ", "", bar_line))
+    entries.append(("", t("max_today"), f"{t_max}{unit_sym}"))
+    entries.append(("", t("min_today"), f"{t_min}{unit_sym}"))
 
     entries.append(("", t("humidity"), f"{atual['relative_humidity_2m']}%"))
     wind_deg = atual.get("wind_direction_10m") or 0
@@ -287,15 +331,17 @@ def format_weather_block(
             if "pm2_5" in aqi_data:
                 entries.append(("", t("pm25_label"), f"{aqi_data['pm2_5']} {t('aqi_unit')}"))
 
-    moon = get_moon_phase()
+    # Use the queried location's date rather than the machine's: near local
+    # midnight the machine clock can be a day ahead of the city being forecast.
+    moon = get_moon_phase(now_dt.replace(tzinfo=None) if now_dt else None)
     moon_name = moon_phase_name(moon, lang)
     entries.append(("", t("moon_phase"), moon_name))
 
     lines: list[str] = []
     sep_lines: list[tuple[str, str]] = []
     for emoji, label, value in entries:
-        if emoji == "  " and not label and value:
-            lines.append(value)
+        if label == _BAR_SENTINEL:
+            sep_lines.append((label, value))
             continue
         if value:
             full_label = f"{label}:" if label else ""
@@ -308,7 +354,10 @@ def format_weather_block(
     max_label = max((display_width(lbl) for lbl, val in sep_lines if val and lbl.strip()), default=0)
 
     for label, value in sep_lines:
-        if value:
+        if label == _BAR_SENTINEL:
+            # The bar carries its own leading indent and must not be padded.
+            lines.append(value)
+        elif value:
             pad = max_label - display_width(label)
             lines.append(f"{label}{' ' * pad} {value}")
         else:
@@ -386,19 +435,11 @@ def display_weather(
 
         r_table(forecast_headers, forecast_rows, title=t("forecast_days").format(n=days))
 
-    alerts = dados.get("alerts", [])
     extremes = detect_extremes(dados, unit_system=cfg.get("unit_system", "metric"))
     recs = generate_recommendations(dados, cfg)
 
-    if alerts or extremes or recs:
+    if extremes or recs:
         parts: list[str] = []
-        for alert in alerts:
-            alert_lines = [
-                f"\U0001f534 {alert.get('event', t('alert_event'))}",
-                f"\U0001f4dd {alert.get('description', '')}",
-                f"\U0001f550 {t('alert_from')}: {alert.get('start', '')} {t('alert_until')}: {alert.get('end', '')}",
-            ]
-            parts.append("\n".join(alert_lines))
         for ext in extremes:
             parts.append(f"\u26a0\ufe0f  {ext}")
         for rec in recs:
@@ -415,7 +456,7 @@ def display_comparison(
     for nome, dados, cfg, city_info in cidades_dados:
         block = format_weather_block(nome, dados, cfg, city_info=city_info)
         if _use_rich():
-            blocks.append(Panel(block, title=nome, border_style="cyan", padding=(0, 1)))
+            blocks.append(Panel(block, title=r_plain(nome), border_style="cyan", padding=(0, 1)))
         else:
             r_panel(block, title=nome)
     if _use_rich() and blocks:

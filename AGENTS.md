@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.2.8
+- **Version**: 0.2.9
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.2.8"
+│   ├── __init__.py           # Package init, __version__ = "0.2.9"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)
@@ -43,7 +43,7 @@ Bom-Clima/
 │       ├── pt.json
 │       └── es.json
 ├── tests/
-│   └── test_bom_clima.py     # 127 unit tests
+│   └── test_bom_clima.py     # 195 unit tests
 ├── pyproject.toml            # Project metadata, tool config
 ├── requirements.txt          # Runtime dependencies
 ├── .gitignore
@@ -67,7 +67,7 @@ The main orchestrator. Handles argument parsing, config loading, and dispatches 
 
 **CLI argument groups:**
 - **Search**: `city`, `--detect`, `--compare`
-- **Display**: `--days`, `--hours`, `--alerts`, `--aqi`, `--imperial`, `--no-color`
+- **Display**: `--days`, `--hours`, `--aqi`, `--imperial`, `--no-color`
 - **Modes**: `--history`, `--no-cache`, `--verbose`
 - **Smart**: `--best-day`, `--vs-yesterday`
 - **Export**: `--export FMT`, `--output FILE`
@@ -76,7 +76,7 @@ The main orchestrator. Handles argument parsing, config loading, and dispatches 
 
 ### `api.py` — API Client (153 lines)
 
-HTTP client for Open-Meteo geocoding, weather, air quality, and alerts APIs.
+HTTP client for Open-Meteo geocoding, weather and air quality APIs.
 
 **Key functions:**
 - `detect_location() → dict | None` — IP-based geolocation via ipapi.co
@@ -125,7 +125,7 @@ DEFAULT_CONFIG = {
 
 All static data lives here:
 
-- **API URLs**: `BASE_URL_GEO`, `BASE_URL_WEATHER`, `BASE_URL_AIR`, `BASE_URL_ALERTS`, `IP_API_URL`
+- **API URLs**: `BASE_URL_GEO`, `BASE_URL_WEATHER`, `BASE_URL_AIR`, `IP_API_URL`
 - **WMO_CODES**: Dict mapping WMO weather codes → `{pt: (desc, icon), en: ..., es: ...}` (30 codes)
 - **COMPASS**: 16-point compass directions (N, NNE, NE, ... NNO)
 - **WIND_ARROWS**: Unicode arrow symbols per compass point (↑, ↗, →, ↘, ↓, ↙, ←, ↖)
@@ -160,7 +160,7 @@ Handles both Rich and plain text output. Auto-detects Rich availability.
 - `_use_rich()` / `_colors_active()` — Structure vs. color markup toggles
 - `_set_colors_enabled(enabled)` — Syncs `_COLORS_ENABLED` and the Rich console color state
 - `format_weather_block(nome, dados, cfg, city_info)` → str — Builds the main weather info block
-- `display_weather(nome, dados, cfg, ...)` — Renders full weather output (panel + hourly + forecast + alerts)
+- `display_weather(nome, dados, cfg, ...)` — Renders full weather output (panel + hourly + forecast + extremes/recommendations)
 - `display_comparison(cidades_dados)` — Side-by-side city comparison using Rich Columns
 
 **Rich availability**: Checked via `HAS_RICH` global. If `rich` is not installed, all display functions fall back to plain text. With colors disabled (`--no-color`), Rich still renders the card structure but fully monochrome.
@@ -205,8 +205,8 @@ Loads translations from `bom_clima/locales/{lang}.json` files.
 
 **Language detection order:**
 1. `~/.config/bom-clima/lang` file (persisted via `--lang` flag)
-2. `$LANG` environment variable
-3. `locale.getlocale()` system locale
+2. `LC_ALL` > `LC_MESSAGES` > `LANGUAGE` > `LANG` environment variables
+3. `locale.getlocale(LC_MESSAGES)` system locale
 4. Windows `GetUserDefaultUILanguage()` API
 5. Fallback: `"en"`
 
@@ -242,7 +242,7 @@ User runs: bom-clima "sao paulo" --aqi --days 7
            ├── format_weather_block() → Rich Panel
            ├── hourly forecast table
            ├── daily forecast table
-           └── alerts (if any)
+           └── extremes + recommendations (if any)
 ```
 
 ## API Endpoints
@@ -252,7 +252,6 @@ User runs: bom-clima "sao paulo" --aqi --days 7
 | Geocoding | `https://geocoding-api.open-meteo.com/v1/search` | City name → lat/lon |
 | Forecast | `https://api.open-meteo.com/v1/forecast` | Current + daily + hourly weather |
 | Air Quality | `https://air-quality-api.open-meteo.com/v1/air-quality` | PM2.5, US AQI |
-| Alerts | `https://api.open-meteo.com/v1/warnings` | Severe weather warnings |
 | IP Location | `https://ipapi.co/json/` | Auto-detect user location |
 
 ## File Locations
@@ -268,7 +267,7 @@ All app data follows the XDG Base Directory Specification:
 
 ## Testing
 
-**Location**: `tests/test_bom_clima.py` (1232 lines, 127 tests)
+**Location**: `tests/test_bom_clima.py` (195 tests)
 
 **Test classes:**
 - `TestWindDirection` — Compass direction conversion
@@ -302,6 +301,17 @@ All app data follows the XDG Base Directory Specification:
 - `TestArgumentMainCombinations` — All pairwise CLI arg integration tests
 - `TestTempColor` — Temperature color thresholds (metric and imperial)
 - `TestNoColorMarkup` — Color markup suppression when colors are disabled
+- `TestConfigPersistenceRegressions` — `--config-set` validation and isolation from flag overrides
+- `TestHistoryRegressions` — Damaged/foreign `history.json` payloads
+- `TestCacheRegressions` — Corrupt rows, future timestamps, unusable database
+- `TestMarkupInjectionRegressions` — City names and history entries containing `[`
+- `TestWeatherDataRegressions` — Error payloads, AQI outages, cache keys, `--no-cache`
+- `TestFormatterRegressions` — Wind angles, day scoring, YAML/XML, export paths
+- `TestLanguageResolutionRegressions` — `--lang` and config `lang` before parsing
+- `TestLocalePrecedence` — LC_ALL handling, regional codes, locale immutability
+- `TestColorThresholds` — Boundary values of the temperature/rain colour steps
+- `TestMoonPhaseReference` — Reference instant and cycle positions
+- `TestComparePartialFailure` — One bad city must not discard the rest
 
 **Key fixtures:**
 - `mock_lang_for_tests` (autouse) — Forces English locale
@@ -341,5 +351,5 @@ python bom-clima.py sao paulo
 - **Error handling**: `ValueError` for user-facing errors, `requests.RequestException` for API errors
 - **Translations**: All user-facing strings go through `t(key)` function
 - **Rich fallback**: Display functions use Rich when installed; with colors disabled they still render the card structure in monochrome (zero ANSI codes)
-- **Cache keys**: Weather cache uses `"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{include_alerts}_{past_days}_{forecast_days}"`
+- **Cache keys**: Weather cache uses `"{lat:.4f}_{lon:.4f}_{unit_system}_{include_aqi}_{past_days}_{forecast_days}"`. Geo cache keys are prefixed with the current language, because the geocoding API localises place names
 - **Type annotations**: `json.loads()` returns require explicit `dict` or `list[dict]` type annotations to satisfy mypy

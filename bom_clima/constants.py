@@ -6,9 +6,8 @@ from pathlib import Path
 BASE_URL_GEO = "https://geocoding-api.open-meteo.com/v1/search"
 BASE_URL_WEATHER = "https://api.open-meteo.com/v1/forecast"
 BASE_URL_AIR = "https://air-quality-api.open-meteo.com/v1/air-quality"
-BASE_URL_ALERTS = "https://api.open-meteo.com/v1/warnings"
 IP_API_URL = "https://ipapi.co/json/"
-HEADERS = {"User-Agent": "BomClima/0.2.8"}
+HEADERS = {"User-Agent": "BomClima/0.2.9"}
 TIMEOUT = 10
 
 WMO_CODES = {
