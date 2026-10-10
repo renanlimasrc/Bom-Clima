@@ -1,7 +1,7 @@
 """Display module for Bom Clima — Rich and plain text output."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 from .formatters import (
@@ -366,6 +366,62 @@ def format_weather_block(
     return "\n".join(lines)
 
 
+def format_at_block(dados: dict, cfg: dict[str, Any], hour: int, minute: int) -> str | None:
+    """Describe the weather at a specific hour, as a card body.
+
+    Returns None when the hourly series cannot answer (missing or empty), so
+    callers fall back to the regular tables. A time that already passed today
+    resolves to the same hour tomorrow: the comparison uses the location's own
+    clock (timezone=auto), never the machine's.
+    """
+    hourly = dados.get("hourly", {})
+    times = hourly.get("time") if isinstance(hourly, dict) else None
+    if not times:
+        return None
+    current = dados.get("current", {})
+    base = str(current.get("time", "") or "")[:10] or str(times[0])[:10]
+    try:
+        target = datetime.fromisoformat(f"{base}T{hour:02d}:{minute:02d}")
+    except ValueError:
+        return None
+    try:
+        now_dt = datetime.fromisoformat(str(current.get("time", "")))
+    except (ValueError, TypeError):
+        now_dt = None
+    if now_dt is not None and target.replace(tzinfo=None) <= now_dt.replace(tzinfo=None):
+        target += timedelta(days=1)
+    pick = -1
+    picked_dt = None
+    for i, ts in enumerate(times):
+        try:
+            ts_dt = datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            continue
+        if ts_dt.replace(tzinfo=None) >= target.replace(tzinfo=None):
+            pick, picked_dt = i, ts_dt
+            break
+    if pick < 0 or picked_dt is None:
+        return None
+    lang = _current_lang()
+    unit = cfg.get("unit_system", "metric")
+    unit_sym = "°F" if unit == "imperial" else "°C"
+    wind_unit = "mph" if unit == "imperial" else "km/h"
+    temp = _num(_at(hourly.get("temperature_2m"), pick))
+    feels = _num(_at(hourly.get("apparent_temperature"), pick))
+    rain_p = _num(_at(hourly.get("precipitation_probability"), pick))
+    wind = _num(_at(hourly.get("wind_speed_10m"), pick))
+    desc, _icon = get_wmo(int(_num(_at(hourly.get("weather_code"), pick))), lang)
+    lines = [
+        picked_dt.strftime("%H:%M (%d/%m)"),
+        f"{t('temperature')}: {_temp_color(temp, unit_sym)}",
+        f"{t('feels_like')}: {feels}{unit_sym}",
+        f"{t('rain_chance')}: {_rain_color(rain_p)}",
+        f"{t('wind')}: {wind} {wind_unit}",
+        desc,
+    ]
+    return "\n".join(lines)
+
+
 def display_weather(
     nome: str,
     dados: dict,
@@ -373,10 +429,16 @@ def display_weather(
     city_info: dict | None = None,
     show_forecast: bool = True,
     show_hourly: bool = True,
+    at_hour: tuple[int, int] | None = None,
 ) -> None:
     _set_colors_enabled(cfg.get("color", True))
     block = format_weather_block(nome, dados, cfg, city_info=city_info)
     r_panel(block, title=f"  {t('current_weather')} {nome}  ")
+
+    if at_hour is not None:
+        at_block = format_at_block(dados, cfg, at_hour[0], at_hour[1])
+        if at_block is not None:
+            r_panel(at_block, title=t("at_title").format(time=f"{at_hour[0]:02d}:{at_hour[1]:02d}"))
 
     if not show_forecast and not show_hourly:
         r_print("")

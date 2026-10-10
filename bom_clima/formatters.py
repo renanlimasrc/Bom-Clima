@@ -312,7 +312,7 @@ def detect_extremes(dados: dict, unit_system: str = "metric") -> list[str]:
 
 def rain_window_summary(dados: dict) -> list[str]:
     hourly = dados.get("hourly", {})
-    if not hourly or not hourly.get("time"):
+    if not isinstance(hourly, dict) or not hourly.get("time"):
         return []
     from datetime import datetime as dt
     current = dados.get("current", {})
@@ -320,6 +320,7 @@ def rain_window_summary(dados: dict) -> list[str]:
         now = dt.fromisoformat(current["time"]).replace(tzinfo=None)
     else:
         now = dt.now()
+    probs = hourly.get("precipitation_probability") or []
     rainy: list[str] = []
     for i, ts in enumerate(hourly["time"]):
         try:
@@ -327,10 +328,15 @@ def rain_window_summary(dados: dict) -> list[str]:
             hours_diff = (ts_dt - now).total_seconds() / 3600
             if hours_diff < 0 or hours_diff > RAIN_WINDOW_HOURS:
                 continue
-            prob = hourly["precipitation_probability"][i]
+            # A null cell or a short/missing array used to raise TypeError /
+            # KeyError here, outside the except below. Non-numeric cells carry
+            # no information, so they are skipped, not crashed on.
+            prob = _at(probs, i)
+            if not isinstance(prob, (int, float)):
+                continue
             if prob >= RAIN_PROB_THRESHOLD:
                 rainy.append(t("rain_time").format(time=ts_dt.strftime("%H:%M"), prob=prob))
-        except (ValueError, IndexError):
+        except (ValueError, IndexError, KeyError, TypeError):
             continue
     return rainy
 

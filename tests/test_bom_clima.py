@@ -1073,6 +1073,7 @@ ALL_BOOLEAN_FLAGS = [
     "--detect", "--compare", "--aqi", "--imperial",
     "--no-color", "--history", "--no-cache", "--verbose",
     "--best-day", "--vs-yesterday", "--config-show", "--help", "--version",
+    "--rain",
 ]
 
 ALL_VALUE_ARGS = [
@@ -1082,6 +1083,7 @@ ALL_VALUE_ARGS = [
     ("--output", "/tmp/test_output.json"),
     ("--lang", "en"),
     ("--config-set", "color=false"),
+    ("--at", "18"),
 ]
 
 
@@ -1124,6 +1126,9 @@ EDGE_VALUE_COMBOS = [
     ["--hours", "24"],
     ["--export", "json,csv,yaml,xml"],
     ["--export", "bogus"],
+    ["--at", "18:30"],
+    ["--at", "25"],
+    ["--at", "18", "--vs-yesterday"],
     ["--config-set", "forecast_days=7"],
     ["--config-set", "forecast_days=100"],
     ["--config-set", "lang=pt"],
@@ -1979,3 +1984,306 @@ class TestExportUnderOptimizeFlag:
         # (files written) is the last line. Under the old `assert documents`
         # code this subprocess died with TypeError instead.
         assert proc.stdout.strip().splitlines()[-1] == "1"
+
+
+class TestRetryRegressions:
+    """Transient 5xx / connection errors used to fail the run outright. _get()
+    retries them with exponential backoff; anything else fails immediately."""
+
+    @staticmethod
+    def _http_error(status):
+        import requests
+
+        resp = MagicMock()
+        resp.status_code = status
+        err = requests.HTTPError(f"{status} error")
+        err.response = resp
+        return err
+
+    def test_success_after_transient_failures(self):
+        import requests
+
+        from bom_clima import api as api_mod
+
+        ok = MagicMock()
+        ok.raise_for_status.return_value = None
+        with (
+            patch.object(api_mod.requests, "get", side_effect=[
+                requests.ConnectionError("down"),
+                requests.Timeout("slow"),
+                self._http_error(503),
+                ok,
+            ]) as mock_get,
+            patch.object(api_mod.time, "sleep") as mock_sleep,
+        ):
+            assert api_mod._get("https://x.test") is ok
+        assert mock_get.call_count == 4
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [0.5, 1.0, 2.0]
+
+    def test_client_error_fails_without_sleeping(self):
+        import requests
+
+        from bom_clima import api as api_mod
+
+        with (
+            patch.object(api_mod.requests, "get", side_effect=self._http_error(404)) as mock_get,
+            patch.object(api_mod.time, "sleep") as mock_sleep,
+            pytest.raises(requests.HTTPError),
+        ):
+            api_mod._get("https://x.test")
+        assert mock_get.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_persistent_outage_raises_after_four_attempts(self):
+        import requests
+
+        from bom_clima import api as api_mod
+
+        with (
+            patch.object(api_mod.requests, "get",
+                          side_effect=requests.ConnectionError("down")) as mock_get,
+            patch.object(api_mod.time, "sleep"),
+            pytest.raises(requests.ConnectionError),
+        ):
+            api_mod._get("https://x.test")
+        assert mock_get.call_count == 4
+
+
+class TestParseAt:
+    @pytest.mark.parametrize("raw,expected", [
+        ("18", (18, 0)), ("08", (8, 0)), ("0", (0, 0)), ("23", (23, 0)),
+        ("18:30", (18, 30)), ("08:05", (8, 5)), ("23:59", (23, 59)),
+        (" 18 ", (18, 0)),
+    ])
+    def test_valid_values(self, raw, expected):
+        from bom_clima.cli import _parse_at
+
+        assert _parse_at(raw) == expected
+
+    def test_absent_flag_returns_none(self):
+        from bom_clima.cli import _parse_at
+
+        assert _parse_at(None) is None
+
+    @pytest.mark.parametrize("raw", ["25", "24:00", "ab", "12:60", "-1", "1:2:3", "", ":"])
+    def test_invalid_values_raise(self, raw):
+        from bom_clima.cli import _parse_at
+
+        with pytest.raises(ValueError):
+            _parse_at(raw)
+
+    def test_invalid_at_exits_non_zero(self, tmp_path):
+        from bom_clima.cli import main as cli_main
+
+        with (
+            patch("sys.argv", ["bom-clima", "sao paulo", "--at", "25"]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli_main()
+        assert exc.value.code == 1
+
+    def test_at_with_vs_yesterday_is_rejected(self, tmp_path, capsys):
+        from bom_clima.cli import main as cli_main
+
+        with (
+            patch("sys.argv", ["bom-clima", "sao paulo", "--at", "18", "--vs-yesterday"]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli_main()
+        assert exc.value.code == 1
+
+
+class TestFormatAtBlock:
+    @staticmethod
+    def _payload():
+        return {
+            "current": {"time": "2026-04-29T14:00", "temperature_2m": 25.0},
+            "daily": {"time": ["2026-04-29", "2026-04-30"]},
+            "hourly": {
+                "time": ["2026-04-29T15:00", "2026-04-29T16:00",
+                         "2026-04-29T17:00", "2026-04-30T13:00"],
+                "temperature_2m": [26.0, 25.5, 24.0, 22.0],
+                "apparent_temperature": [27.5, 26.0, 25.0, 23.0],
+                "precipitation_probability": [5, 10, 40, 20],
+                "wind_speed_10m": [14, 13, 12, 10],
+                "weather_code": [1, 2, 61, 3],
+            },
+        }
+
+    def test_future_hour_same_day(self):
+        from bom_clima.display import format_at_block
+
+        block = format_at_block(self._payload(), {"unit_system": "metric"}, 16, 0)
+        assert block is not None
+        assert "16:00" in block.splitlines()[0]
+
+    def test_past_hour_rolls_to_tomorrow(self):
+        """14:00 now + --at 13 resolves to tomorrow 13:00, never to this
+        morning, and uses the location's clock, not the machine's."""
+        from bom_clima.display import format_at_block
+
+        block = format_at_block(self._payload(), {"unit_system": "metric"}, 13, 0)
+        assert block is not None
+        assert block.splitlines()[0].startswith("13:00 (30/04)")
+
+    def test_missing_hourly_returns_none(self):
+        from bom_clima.display import format_at_block
+
+        assert format_at_block({"current": {}, "daily": {}}, {}, 18, 0) is None
+        assert format_at_block({"hourly": {"time": []}}, {}, 18, 0) is None
+
+
+class TestRainFlag:
+    def test_rainy_payload_renders_windows(self):
+        from bom_clima import cli as cli_mod
+
+        dados = {
+            "current": {"time": "2026-04-29T14:00"},
+            "hourly": {
+                "time": ["2026-04-29T15:00", "2026-04-29T16:00"],
+                "precipitation_probability": [5, 60],
+            },
+        }
+        args = type("Args", (), {"rain": True})()
+        with patch.object(cli_mod, "r_panel") as mock_panel:
+            cli_mod._show_rain(dados, {}, args)
+        mock_panel.assert_called_once()
+        assert "16:00" in mock_panel.call_args.args[0]
+
+    def test_dry_payload_renders_no_rain_message(self):
+        from bom_clima import cli as cli_mod
+        from bom_clima.i18n import t
+
+        dados = {
+            "current": {"time": "2026-04-29T14:00"},
+            "hourly": {
+                "time": ["2026-04-29T15:00"],
+                "precipitation_probability": [5],
+            },
+        }
+        args = type("Args", (), {"rain": True})()
+        with patch.object(cli_mod, "r_panel") as mock_panel:
+            cli_mod._show_rain(dados, {}, args)
+        mock_panel.assert_called_once()
+        assert mock_panel.call_args.args[0] == t("no_rain_expected")
+
+    def test_flag_off_renders_nothing(self):
+        from bom_clima import cli as cli_mod
+
+        args = type("Args", (), {"rain": False})()
+        with patch.object(cli_mod, "r_panel") as mock_panel:
+            cli_mod._show_rain({"hourly": {}}, {}, args)
+        assert mock_panel.call_count == 0
+
+
+class TestDisambiguationRegressions:
+    @staticmethod
+    def _cands():
+        return [
+            {"name": "Springfield", "admin1": "Illinois", "country": "US",
+             "latitude": 39.78, "longitude": -89.65},
+            {"name": "Springfield", "admin1": "Missouri", "country": "US",
+             "latitude": 37.21, "longitude": -93.29},
+            {"name": "Springfield", "admin1": "Ohio", "country": "US",
+             "latitude": 39.92, "longitude": -83.81},
+        ]
+
+    def test_search_cities_returns_every_candidate(self, tmp_path):
+        from bom_clima import api as api_mod
+
+        resp = MagicMock()
+        resp.json.return_value = {"results": self._cands()}
+        with (
+            patch.object(api_mod, "_get", return_value=resp) as mock_get,
+            patch.object(api_mod, "cache_set_geo") as mock_set,
+        ):
+            results = api_mod.search_cities("springfield", no_cache=True)
+        assert len(results) == 3
+        assert results[1]["admin1"] == "Missouri"
+        assert mock_get.call_count == 1
+        assert mock_set.call_count == 0
+
+    def test_search_cities_caches_wrapper_once(self, tmp_path):
+        from bom_clima import api as api_mod
+        from bom_clima.cache import cache_get_geo
+
+        resp = MagicMock()
+        resp.json.return_value = {"results": self._cands()}
+        with patch.object(api_mod, "_get", return_value=resp) as mock_get:
+            first = api_mod.search_cities("springfield")
+            second = api_mod.search_cities("springfield")
+        assert mock_get.call_count == 1
+        assert first == second
+        # One key holds every candidate, so a later pick can never overwrite
+        # an earlier one.
+        assert cache_get_geo("en:springfield") == {"results": self._cands()}
+
+    def test_legacy_single_result_cache_still_reads(self, tmp_path):
+        from bom_clima import api as api_mod
+
+        with patch.object(api_mod, "cache_get_geo", return_value=dict(self._cands()[0])):
+            assert api_mod.search_cities("springfield") == [self._cands()[0]]
+
+    def test_pick_second_candidate(self):
+        from bom_clima.cli import _resolve_city
+
+        with (
+            patch("bom_clima.cli.search_cities", return_value=self._cands()),
+            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
+            patch("builtins.input", return_value="2"),
+        ):
+            assert _resolve_city("springfield", no_cache=True)["admin1"] == "Missouri"
+
+    @pytest.mark.parametrize("choice", ["", "abc", "0", "99"])
+    def test_bad_choice_falls_back_to_first(self, choice):
+        from bom_clima.cli import _resolve_city
+
+        with (
+            patch("bom_clima.cli.search_cities", return_value=self._cands()),
+            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
+            patch("builtins.input", return_value=choice),
+        ):
+            assert _resolve_city("springfield", no_cache=True)["admin1"] == "Illinois"
+
+    def test_non_tty_uses_first_with_stderr_note(self, capsys):
+        from bom_clima.cli import _resolve_city
+
+        with (
+            patch("bom_clima.cli.search_cities", return_value=self._cands()),
+            patch("bom_clima.cli.sys.stdin.isatty", return_value=False),
+        ):
+            picked = _resolve_city("springfield", no_cache=True)
+        assert picked["admin1"] == "Illinois"
+        assert "Springfield" in capsys.readouterr().err
+
+    def test_markup_in_names_does_not_crash_listing(self, capsys):
+        """Candidate names go through Rich; unescaped '[' used to raise
+        MarkupError, which the CLI's `except ValueError` does not catch."""
+        from bom_clima.cli import _resolve_city
+
+        cands = [
+            dict(self._cands()[0], name="A[/bold]B"),
+            self._cands()[1],
+        ]
+        with (
+            patch("bom_clima.cli.search_cities", return_value=cands),
+            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
+            patch("builtins.input", return_value="1"),
+        ):
+            picked = _resolve_city("A[/bold]B", no_cache=True)
+        assert picked["name"] == "A[/bold]B"
+        out = capsys.readouterr().out
+        assert "A[/bold]B" in out
+
+    def test_truncated_json_body_reads_as_not_found(self):
+        import json as json_mod
+
+        from bom_clima.api import search_cities
+
+        resp = MagicMock()
+        resp.json.side_effect = json_mod.JSONDecodeError("x", "y", 0)
+        with (
+            patch("bom_clima.api._get", return_value=resp),
+            pytest.raises(ValueError, match="not found"),
+        ):
+            search_cities("sp", no_cache=True)

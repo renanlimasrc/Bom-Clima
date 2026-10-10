@@ -1,3 +1,18 @@
+## [0.3.0] - 2026-10-10
+
+### Added
+- Retry with exponential backoff on transient HTTP failures (connection
+  errors, timeouts, 500/502/503/504): 4 attempts, no more instant failure on
+  a momentary outage.
+- `--at HH[:MM]` shows the weather at a specific hour in a compact card; a
+  past hour resolves to tomorrow. Rejected in combination with
+  `--vs-yesterday`.
+- `--rain` renders only the 24h rain windows (or the no-rain message) and
+  composes with every fetch path including `--compare`.
+- City disambiguation: ambiguous queries list the top candidates and ask to
+  pick one (Enter keeps the first); without a TTY the first is used with a
+  stderr note. All candidates share one cache entry.
+
 ## [0.2.9] - 2026-10-10
 
 ### Fixed

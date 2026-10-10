@@ -1,6 +1,7 @@
 """API client for Open-Meteo and IP location."""
 
 import json
+import time
 from typing import Any
 
 import requests
@@ -17,12 +18,41 @@ from .constants import (
 from .i18n import t
 
 MAX_FORECAST_DAYS = 16
+GEO_COUNT = 5
+
+_RETRY_ATTEMPTS = 4
+_RETRY_BACKOFF = 0.5
+_RETRIABLE_STATUS = (500, 502, 503, 504)
+
+
+def _get(url: str, params: dict[str, Any] | None = None) -> requests.Response:
+    """GET with retries on transient failures.
+
+    Connection errors, timeouts and 5xx responses are retried with exponential
+    backoff; anything else (4xx, redirect loops, a bare RequestException)
+    fails immediately without sleeping.
+    """
+    last_exc: requests.RequestException = requests.RequestException(f"GET {url} failed")
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            res = requests.get(url, params=params, headers=HEADERS, timeout=TIMEOUT)
+            res.raise_for_status()
+            return res
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status not in _RETRIABLE_STATUS:
+                raise
+            last_exc = exc
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exc = exc
+        if attempt < _RETRY_ATTEMPTS - 1:
+            time.sleep(_RETRY_BACKOFF * (2 ** attempt))
+    raise last_exc
 
 
 def detect_location() -> dict | None:
     try:
-        res = requests.get(IP_API_URL, headers=HEADERS, timeout=TIMEOUT)
-        res.raise_for_status()
+        res = _get(IP_API_URL)
         data = res.json()
         if "latitude" in data and "longitude" in data:
             return {
@@ -39,7 +69,13 @@ def detect_location() -> dict | None:
     return None
 
 
-def search_city(nome: str, no_cache: bool = False) -> dict:
+def search_cities(nome: str, no_cache: bool = False) -> list[dict]:
+    """Geocode a query, returning every candidate the API found.
+
+    Results are cached as a {"results": [...]} wrapper, so picking a different
+    candidate later never overwrites another pick. Entries written by older
+    versions (a single result dict) are still understood.
+    """
     from .i18n import _current_lang
 
     city_name = nome.strip() if nome else ""
@@ -52,21 +88,42 @@ def search_city(nome: str, no_cache: bool = False) -> dict:
     cache_key = f"{lang}:{city_name.casefold()}"
     if not no_cache:
         cached = cache_get_geo(cache_key)
-        if cached:
-            return cached
-    params: dict[str, str | int] = {"name": city_name, "count": 1, "language": lang, "format": "json"}
+        if isinstance(cached, dict):
+            if isinstance(cached.get("results"), list):
+                results = [r for r in cached["results"] if isinstance(r, dict)]
+                if results:
+                    return results[:GEO_COUNT]
+            elif "name" in cached:
+                # Entries cached by older versions hold a single result dict.
+                return [cached]
+    params: dict[str, str | int] = {"name": city_name, "count": GEO_COUNT, "language": lang, "format": "json"}
     try:
-        res = requests.get(BASE_URL_GEO, params=params, headers=HEADERS, timeout=TIMEOUT)
-        res.raise_for_status()
+        res = _get(BASE_URL_GEO, params=params)
         data = res.json()
-        result: dict = data["results"][0]
-        if not no_cache:
-            cache_set_geo(cache_key, result)
-        return result
-    except (requests.RequestException, KeyError, IndexError, TypeError) as exc:
-        # TypeError: the API answers {"results": null} rather than [] when it
-        # finds nothing for some queries.
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        # JSONDecodeError: a truncated/proxied body. detect_location handles
+        # it the same way; without this the user would see the raw decoder
+        # message instead of the translated "not found" one.
         raise ValueError(t("city_not_found").format(name=city_name)) from exc
+    # A null/garbage body must read as "not found", never as a traceback: the
+    # API answers {"results": null} rather than [] for some queries.
+    if not isinstance(data, dict):
+        raise ValueError(t("city_not_found").format(name=city_name))
+    results = [r for r in (data.get("results") or []) if isinstance(r, dict)][:GEO_COUNT]
+    if not results:
+        raise ValueError(t("city_not_found").format(name=city_name))
+    if not no_cache:
+        cache_set_geo(cache_key, {"results": results})
+    return results
+
+
+def search_city(nome: str, no_cache: bool = False) -> dict:
+    """Geocode a query, returning the best candidate.
+
+    Kept for callers that don't need disambiguation; search_cities() raises
+    when there is nothing, so [0] below is always safe.
+    """
+    return search_cities(nome, no_cache=no_cache)[0]
 
 
 def fetch_weather_data(
@@ -123,8 +180,7 @@ def fetch_weather_data(
     try:
         if verbose:
             print(f"[debug] fetching weather for {lat},{lon}")
-        res = requests.get(BASE_URL_WEATHER, params=params, headers=HEADERS, timeout=TIMEOUT)
-        res.raise_for_status()
+        res = _get(BASE_URL_WEATHER, params=params)
         result: dict = res.json()
     except requests.RequestException as exc:
         raise ValueError(t("weather_error")) from exc
@@ -147,8 +203,7 @@ def fetch_weather_data(
                 "current": "us_aqi,pm10,pm2_5,nitrogen_dioxide",
                 "timezone": "auto",
             }
-            air_res = requests.get(BASE_URL_AIR, params=air_params, headers=HEADERS, timeout=TIMEOUT)
-            air_res.raise_for_status()
+            air_res = _get(BASE_URL_AIR, params=air_params)
             result["air_quality"] = air_res.json().get("current", {})
         except requests.RequestException as exc:
             if verbose:

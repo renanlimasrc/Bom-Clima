@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.2.9-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -173,6 +173,8 @@ bom-clima --history
 | `--days N` | Number of days in forecast (default: 5, max: 15) |
 | `--hours N` | Number of hours in hourly forecast (default: 6) |
 | `--aqi` | Include air quality (PM2.5, US AQI) |
+| `--at HH[:MM]` | Show the weather at a specific hour |
+| `--rain` | Show only rain windows in the next 24h |
 | `--imperial` | Use imperial units (°F, mph, in) |
 | `--no-color` | Disable colored output |
 | `--export FMT` | Export data: json, csv, yaml, or xml (comma-separated) |
@@ -287,7 +289,7 @@ cd Bom-Clima
 python -m pytest tests/test_bom_clima.py -v
 ```
 
-All 195 tests should pass
+All 232 tests should pass
 
 ## 📜 License
 

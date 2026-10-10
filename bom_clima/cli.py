@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from . import __version__
-from .api import detect_location, fetch_weather_data, search_city
+from .api import detect_location, fetch_weather_data, search_cities
 from .cache import cache_cleanup
 from .config import _sanitize, load_config, save_config
 from .constants import VALID_CONFIG_KEYS, ensure_app_dir
@@ -21,7 +21,7 @@ from .display import (
     r_panel,
     r_print,
 )
-from .formatters import export_all_formats, score_days, today_index, unit_symbols
+from .formatters import export_all_formats, rain_window_summary, score_days, today_index, unit_symbols
 from .history import add_history, load_history
 from .i18n import set_lang, t
 
@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     disp.add_argument("-D", "--days", type=int, default=None, help=t("help_days") + " (max: 15)")
     disp.add_argument("-H", "--hours", type=int, default=None, help=t("help_hours"))
     disp.add_argument("-q", "--aqi", action="store_true", help=t("help_aqi"))
+    disp.add_argument("--at", metavar="HH[:MM]", default=None, help=t("help_at"))
+    disp.add_argument("--rain", action="store_true", help=t("help_rain"))
     disp.add_argument("-i", "--imperial", action="store_true", help=t("help_imperial"))
     disp.add_argument("-n", "--no-color", action="store_true", help=t("help_no_color"))
 
@@ -92,6 +94,8 @@ def show_help() -> None:
     lines.append(f"    -D, --days N      {t('help_display_days')}")
     lines.append(f"    -H, --hours N     {t('help_display_hours')}")
     lines.append(f"    -q, --aqi         {t('help_display_aqi')}")
+    lines.append(f"    --at HH[:MM]      {t('help_display_at')}")
+    lines.append(f"    --rain            {t('help_display_rain')}")
     lines.append(f"    -i, --imperial    {t('help_display_imperial')}")
     lines.append(f"    -n, --no-color    {t('help_display_color')}")
     lines.append("")
@@ -332,12 +336,96 @@ def _show_vs_yesterday(dados: dict, unit_system: str = "metric") -> None:
     r_panel(text, title=t("vs_yesterday"))
 
 
+def _show_rain(dados: dict, cfg: dict[str, Any], args: argparse.Namespace) -> None:
+    """Render only the 24h rain windows. Available on every fetch path, so
+    --rain composes with --compare and multi-city runs instead of being
+    silently ignored there."""
+    if not getattr(args, "rain", False):
+        return
+    rainy = rain_window_summary(dados)
+    if rainy:
+        r_panel("\n".join(rainy), title=t("rain_window"))
+    else:
+        r_panel(t("no_rain_expected"), title=t("rain_window"))
+
+
+def _parse_at(raw: str | None) -> tuple[int, int] | None:
+    """Parse --at into (hour, minute). Returns None when the flag is absent.
+
+    Raises ValueError for anything outside 00:00-23:59, including bare "24",
+    negative values and non-numeric input.
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    parts = text.split(":")
+    if len(parts) > 2:
+        raise ValueError(t("invalid_at").format(value=raw))
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) == 2 else 0
+    except ValueError:
+        raise ValueError(t("invalid_at").format(value=raw)) from None
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(t("invalid_at").format(value=raw))
+    return hour, minute
+
+
+def _describe_candidate(c: dict) -> str:
+    bits = [str(c.get("name", "?"))]
+    if c.get("admin1"):
+        bits.append(str(c["admin1"]))
+    if c.get("country"):
+        bits.append(str(c["country"]))
+    coords = ""
+    if c.get("latitude") is not None and c.get("longitude") is not None:
+        coords = f" ({c['latitude']:.2f}, {c['longitude']:.2f})"
+    return ", ".join(bits) + coords
+
+
+def _resolve_city(city: str, no_cache: bool) -> dict:
+    """Geocode, asking the user to pick when the query is ambiguous.
+
+    A single candidate (or a TTY-less run, where no question can be asked)
+    returns silently, with a stderr note when alternatives were dropped.
+    """
+    candidates = search_cities(city, no_cache=no_cache)
+    if len(candidates) <= 1:
+        return candidates[0]
+    if not sys.stdin.isatty():
+        print(
+            t("city_ambiguous").format(query=city.strip(), name=candidates[0].get("name", "?")),
+            file=sys.stderr,
+        )
+        return candidates[0]
+    # Candidate names and the raw query come from outside (geocoding API and
+    # argv); printed through Rich they would be parsed as markup tags, so
+    # escape them the same way history entries and card titles are.
+    r_print(t("city_options").format(query=r_escape(city.strip())))
+    for i, cand in enumerate(candidates, 1):
+        r_print(f"  {i}. {r_escape(_describe_candidate(cand))}")
+    try:
+        choice = input(t("city_pick").format(n=len(candidates))).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return candidates[0]
+    if not choice:
+        return candidates[0]
+    try:
+        n = int(choice)
+    except ValueError:
+        return candidates[0]
+    if not 1 <= n <= len(candidates):
+        return candidates[0]
+    return candidates[n - 1]
+
+
 def _fetch_and_display(
     city: str,
     cfg: dict[str, Any],
     args: argparse.Namespace,
 ) -> tuple[str, dict, dict]:
-    cidade_info = search_city(city, no_cache=args.no_cache)
+    cidade_info = _resolve_city(city, no_cache=args.no_cache)
     past_days = 1 if getattr(args, "vs_yesterday", False) else 0
     dados = fetch_weather_data(
         cidade_info["latitude"],
@@ -410,6 +498,18 @@ def main() -> None:
     _validate_positive(args.days, "--days")
     _validate_positive(args.hours, "--hours")
 
+    try:
+        at_hour = _parse_at(getattr(args, "at", None))
+    except ValueError as e:
+        print(f"\n{e}\n")
+        sys.exit(1)
+    if at_hour is not None and getattr(args, "vs_yesterday", False):
+        # --vs-yesterday compares today's max against yesterday's; pinning the
+        # view to one hour makes that comparison meaningless, so reject the
+        # combination loudly instead of ignoring one of the flags.
+        print(f"\n{t('at_vs_yesterday')}\n")
+        sys.exit(1)
+
     cfg = apply_config_overrides(cfg, args)
 
     if args.output and not args.export:
@@ -448,8 +548,9 @@ def main() -> None:
             except ValueError as e:
                 print(f"\n{e}\n")
                 sys.exit(1)
-            display_weather(city_name, dados, cfg)
+            display_weather(city_name, dados, cfg, at_hour=at_hour)
             _show_best_day(dados, cfg, args)
+            _show_rain(dados, cfg, args)
             if args.vs_yesterday:
                 _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city_name, loc["lat"], loc["lon"])
@@ -507,6 +608,8 @@ def main() -> None:
                 _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
         for _nome, dados, _cfg, _info in resultados:
             _show_best_day(dados, cfg, args)
+        for _nome, dados, _cfg, _info in resultados:
+            _show_rain(dados, cfg, args)
         if args.export:
             for nome, dados, _, _ in resultados:
                 _do_export(dados, nome, args.export, args.output, per_city=True)
@@ -520,8 +623,9 @@ def main() -> None:
         except ValueError as e:
             print(f"\n{e}\n")
             sys.exit(1)
-        display_weather(nome, dados, cfg, city_info=cidade_info)
+        display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
         _show_best_day(dados, cfg, args)
+        _show_rain(dados, cfg, args)
         if args.vs_yesterday:
             _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
         add_history(cities[0], cidade_info["latitude"], cidade_info["longitude"])
@@ -534,8 +638,9 @@ def main() -> None:
             except ValueError as e:
                 print(f"\n{e}\n")
                 sys.exit(1)
-            display_weather(nome, dados, cfg, city_info=cidade_info)
+            display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
             _show_best_day(dados, cfg, args)
+            _show_rain(dados, cfg, args)
             if args.vs_yesterday:
                 _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
             add_history(city, cidade_info["latitude"], cidade_info["longitude"])

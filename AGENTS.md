@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.2.9
+- **Version**: 0.3.0
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.2.9"
+│   ├── __init__.py           # Package init, __version__ = "0.3.0"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)
@@ -43,7 +43,7 @@ Bom-Clima/
 │       ├── pt.json
 │       └── es.json
 ├── tests/
-│   └── test_bom_clima.py     # 195 unit tests
+│   └── test_bom_clima.py     # 232 unit tests
 ├── pyproject.toml            # Project metadata, tool config
 ├── requirements.txt          # Runtime dependencies
 ├── .gitignore
@@ -67,7 +67,7 @@ The main orchestrator. Handles argument parsing, config loading, and dispatches 
 
 **CLI argument groups:**
 - **Search**: `city`, `--detect`, `--compare`
-- **Display**: `--days`, `--hours`, `--aqi`, `--imperial`, `--no-color`
+- **Display**: `--days`, `--hours`, `--aqi`, `--at`, `--rain`, `--imperial`, `--no-color`
 - **Modes**: `--history`, `--no-cache`, `--verbose`
 - **Smart**: `--best-day`, `--vs-yesterday`
 - **Export**: `--export FMT`, `--output FILE`
@@ -267,7 +267,7 @@ All app data follows the XDG Base Directory Specification:
 
 ## Testing
 
-**Location**: `tests/test_bom_clima.py` (195 tests)
+**Location**: `tests/test_bom_clima.py` (232 tests)
 
 **Test classes:**
 - `TestWindDirection` — Compass direction conversion

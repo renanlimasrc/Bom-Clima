@@ -157,5 +157,15 @@
     "config_key_unknown": "Clave de configuración desconocida '{key}'.",
     "config_value_invalid": "Valor no válido para '{key}': {reason}.",
     "output_without_export": "Aviso: --output requiere --export; no se escribió ningún archivo.",
-    "tbl_score": "Punt"
+    "tbl_score": "Punt",
+    "help_at": "Muestra el clima a una hora específica (HH o HH:MM)",
+    "help_display_at": "Clima a una hora específica (p. ej.: --at 18).",
+    "help_rain": "Muestra solo las ventanas de lluvia en las próximas 24h",
+    "help_display_rain": "Solo las ventanas de lluvia en las próximas 24h.",
+    "at_title": "Clima a las {time}",
+    "invalid_at": "--at no válido: {value}. Use HH o HH:MM (00:00-23:59).",
+    "at_vs_yesterday": "--at no se puede combinar con --vs-yesterday.",
+    "city_options": "Varias ciudades encontradas para '{query}':",
+    "city_pick": "Elige una ciudad (1-{n}, Enter para 1): ",
+    "city_ambiguous": "Varios resultados para '{query}'; usando '{name}'."
 }

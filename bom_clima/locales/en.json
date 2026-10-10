@@ -157,5 +157,15 @@
     "config_key_unknown": "Unknown config key '{key}'.",
     "config_value_invalid": "Invalid value for '{key}': {reason}.",
     "output_without_export": "Warning: --output needs --export; no file was written.",
-    "tbl_score": "Score"
+    "tbl_score": "Score",
+    "help_at": "Show the weather at a specific hour (HH or HH:MM)",
+    "help_display_at": "Weather at a specific hour (e.g. --at 18).",
+    "help_rain": "Show only rain windows in the next 24h",
+    "help_display_rain": "Only rain windows in the next 24h.",
+    "at_title": "Weather at {time}",
+    "invalid_at": "Invalid --at value: {value}. Use HH or HH:MM (00:00-23:59).",
+    "at_vs_yesterday": "--at cannot be combined with --vs-yesterday.",
+    "city_options": "Multiple cities found for '{query}':",
+    "city_pick": "Choose a city (1-{n}, Enter for 1): ",
+    "city_ambiguous": "Multiple matches for '{query}'; using '{name}'."
 }
