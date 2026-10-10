@@ -2224,56 +2224,55 @@ class TestDisambiguationRegressions:
         with patch.object(api_mod, "cache_get_geo", return_value=dict(self._cands()[0])):
             assert api_mod.search_cities("springfield") == [self._cands()[0]]
 
-    def test_pick_second_candidate(self):
+    def test_ambiguous_picks_first_and_lists_alternatives(self, capsys):
+        """No prompt: the most populous candidate wins, and stderr shows the
+        alternatives with their states plus how to refine the query."""
         from bom_clima.cli import _resolve_city
+
+        def _no_prompt(_prompt=""):
+            raise AssertionError("must never prompt for input")
 
         with (
             patch("bom_clima.cli.search_cities", return_value=self._cands()),
-            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
-            patch("builtins.input", return_value="2"),
-        ):
-            assert _resolve_city("springfield", no_cache=True)["admin1"] == "Missouri"
-
-    @pytest.mark.parametrize("choice", ["", "abc", "0", "99"])
-    def test_bad_choice_falls_back_to_first(self, choice):
-        from bom_clima.cli import _resolve_city
-
-        with (
-            patch("bom_clima.cli.search_cities", return_value=self._cands()),
-            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
-            patch("builtins.input", return_value=choice),
-        ):
-            assert _resolve_city("springfield", no_cache=True)["admin1"] == "Illinois"
-
-    def test_non_tty_uses_first_with_stderr_note(self, capsys):
-        from bom_clima.cli import _resolve_city
-
-        with (
-            patch("bom_clima.cli.search_cities", return_value=self._cands()),
-            patch("bom_clima.cli.sys.stdin.isatty", return_value=False),
+            patch("builtins.input", side_effect=_no_prompt),
         ):
             picked = _resolve_city("springfield", no_cache=True)
         assert picked["admin1"] == "Illinois"
-        assert "Springfield" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "Missouri" in err and "Ohio" in err
+        assert "springfield, Missouri" in err
 
-    def test_markup_in_names_does_not_crash_listing(self, capsys):
-        """Candidate names go through Rich; unescaped '[' used to raise
-        MarkupError, which the CLI's `except ValueError` does not catch."""
+    def test_single_candidate_is_silent(self, capsys):
+        from bom_clima.cli import _resolve_city
+
+        with patch("bom_clima.cli.search_cities", return_value=[self._cands()[0]]):
+            picked = _resolve_city("springfield", no_cache=True)
+        assert picked["admin1"] == "Illinois"
+        assert capsys.readouterr().err == ""
+
+    def test_hint_omitted_without_admin1(self, capsys):
+        from bom_clima.cli import _resolve_city
+
+        cands = [dict(self._cands()[0]), {"name": "Nowhere"}]
+        with patch("bom_clima.cli.search_cities", return_value=cands):
+            _resolve_city("nowhere", no_cache=True)
+        err = capsys.readouterr().err
+        assert "Nowhere" in err
+        assert "Tip:" not in err and "Dica:" not in err and "Consejo:" not in err
+
+    def test_markup_in_names_does_not_crash_note(self, capsys):
+        """The note goes through plain print (not Rich), so '[' in API place
+        names is rendered literally instead of raising MarkupError."""
         from bom_clima.cli import _resolve_city
 
         cands = [
             dict(self._cands()[0], name="A[/bold]B"),
             self._cands()[1],
         ]
-        with (
-            patch("bom_clima.cli.search_cities", return_value=cands),
-            patch("bom_clima.cli.sys.stdin.isatty", return_value=True),
-            patch("builtins.input", return_value="1"),
-        ):
+        with patch("bom_clima.cli.search_cities", return_value=cands):
             picked = _resolve_city("A[/bold]B", no_cache=True)
         assert picked["name"] == "A[/bold]B"
-        out = capsys.readouterr().out
-        assert "A[/bold]B" in out
+        assert "A[/bold]B" in capsys.readouterr().err
 
     def test_truncated_json_body_reads_as_not_found(self):
         import json as json_mod

@@ -165,7 +165,7 @@
     "at_title": "Weather at {time}",
     "invalid_at": "Invalid --at value: {value}. Use HH or HH:MM (00:00-23:59).",
     "at_vs_yesterday": "--at cannot be combined with --vs-yesterday.",
-    "city_options": "Multiple cities found for '{query}':",
-    "city_pick": "Choose a city (1-{n}, Enter for 1): ",
-    "city_ambiguous": "Multiple matches for '{query}'; using '{name}'."
+    "city_ambiguous": "Multiple matches for '{query}'; using '{name}'.",
+    "city_alternatives": "Other matches: {alternatives}.",
+    "city_refine_hint": "Tip: include the state after a comma, e.g. '{example}'."
 }

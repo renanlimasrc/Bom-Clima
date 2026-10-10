@@ -165,7 +165,7 @@
     "at_title": "Clima a las {time}",
     "invalid_at": "--at no válido: {value}. Use HH o HH:MM (00:00-23:59).",
     "at_vs_yesterday": "--at no se puede combinar con --vs-yesterday.",
-    "city_options": "Varias ciudades encontradas para '{query}':",
-    "city_pick": "Elige una ciudad (1-{n}, Enter para 1): ",
-    "city_ambiguous": "Varios resultados para '{query}'; usando '{name}'."
+    "city_ambiguous": "Varios resultados para '{query}'; usando '{name}'.",
+    "city_alternatives": "Otros resultados: {alternatives}.",
+    "city_refine_hint": "Consejo: incluye el estado tras una coma, p. ej.: '{example}'."
 }

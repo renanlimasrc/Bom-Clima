@@ -7,7 +7,7 @@ BASE_URL_GEO = "https://geocoding-api.open-meteo.com/v1/search"
 BASE_URL_WEATHER = "https://api.open-meteo.com/v1/forecast"
 BASE_URL_AIR = "https://air-quality-api.open-meteo.com/v1/air-quality"
 IP_API_URL = "https://ipapi.co/json/"
-HEADERS = {"User-Agent": "BomClima/0.3.0"}
+HEADERS = {"User-Agent": "BomClima/0.3.1"}
 TIMEOUT = 10
 
 WMO_CODES = {

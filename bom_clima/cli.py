@@ -384,40 +384,30 @@ def _describe_candidate(c: dict) -> str:
 
 
 def _resolve_city(city: str, no_cache: bool) -> dict:
-    """Geocode, asking the user to pick when the query is ambiguous.
+    """Geocode, always taking the first (most populous) candidate.
 
-    A single candidate (or a TTY-less run, where no question can be asked)
-    returns silently, with a stderr note when alternatives were dropped.
+    When the query is ambiguous the alternatives are listed on stderr, with a
+    hint showing how to refine (city + state, comma-separated — the only form
+    the geocoding API understands). There is deliberately no prompt: GeoNames
+    holds phantom micro-localities (e.g. a population-less "Guarulhos" in Rio
+    de Janeiro), so asking would keep suggesting places that don't exist.
     """
     candidates = search_cities(city, no_cache=no_cache)
     if len(candidates) <= 1:
         return candidates[0]
-    if not sys.stdin.isatty():
-        print(
-            t("city_ambiguous").format(query=city.strip(), name=candidates[0].get("name", "?")),
-            file=sys.stderr,
-        )
-        return candidates[0]
-    # Candidate names and the raw query come from outside (geocoding API and
-    # argv); printed through Rich they would be parsed as markup tags, so
-    # escape them the same way history entries and card titles are.
-    r_print(t("city_options").format(query=r_escape(city.strip())))
-    for i, cand in enumerate(candidates, 1):
-        r_print(f"  {i}. {r_escape(_describe_candidate(cand))}")
-    try:
-        choice = input(t("city_pick").format(n=len(candidates))).strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return candidates[0]
-    if not choice:
-        return candidates[0]
-    try:
-        n = int(choice)
-    except ValueError:
-        return candidates[0]
-    if not 1 <= n <= len(candidates):
-        return candidates[0]
-    return candidates[n - 1]
+    picked = candidates[0]
+    alternatives = "; ".join(_describe_candidate(c) for c in candidates[1:])
+    lines = [
+        t("city_ambiguous").format(query=city.strip(), name=picked.get("name", "?")),
+        t("city_alternatives").format(alternatives=alternatives),
+    ]
+    admin1 = candidates[1].get("admin1")
+    if admin1:
+        lines.append(t("city_refine_hint").format(example=f"{city.strip()}, {admin1}"))
+    # Plain print: this is a note, not a card, and Rich would parse any '['
+    # in API place names as markup tags.
+    print("\n".join(lines), file=sys.stderr)
+    return picked
 
 
 def _fetch_and_display(

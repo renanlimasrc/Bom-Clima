@@ -1,3 +1,12 @@
+## [0.3.1] - 2026-10-10
+
+### Changed
+- City disambiguation no longer prompts: the first (most populous) candidate
+  always wins, and ambiguous queries print the alternatives with their states
+  plus a refine hint (city + state, comma-separated) on stderr. Prompting kept
+  surfacing phantom GeoNames micro-localities (e.g. a population-less
+  "Guarulhos" in Rio de Janeiro).
+
 ## [0.3.0] - 2026-10-10
 
 ### Added
@@ -9,9 +18,10 @@
   `--vs-yesterday`.
 - `--rain` renders only the 24h rain windows (or the no-rain message) and
   composes with every fetch path including `--compare`.
-- City disambiguation: ambiguous queries list the top candidates and ask to
-  pick one (Enter keeps the first); without a TTY the first is used with a
-  stderr note. All candidates share one cache entry.
+- City disambiguation: ambiguous queries use the first (most populous)
+  candidate and list the alternatives with their states on stderr, with a
+  refine hint (city + state, comma-separated). All candidates share one
+  cache entry.
 
 ## [0.2.9] - 2026-10-10
 
