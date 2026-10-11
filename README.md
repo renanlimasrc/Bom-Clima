@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.3.1-blue.svg)
+![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -32,6 +32,7 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 ### Display & UI
 - **Colored output** — Beautiful terminal output with Rich library, automatic fallback for non-Rich environments
 - **Monochrome cards** — `--no-color` keeps the card layout with zero ANSI codes
+- **One-line output** (`--line`) — `São Paulo: 🌤️ 21.6°C`, sized for a tmux/i3status bar or shell prompt
 - **Side-by-side comparison** (`--compare`) — Compare weather between multiple cities
 - **Localized weekday names** — Days appear in your system's language (Seg/Mon/Lun)
 - **Temperature bar** — Visual temperature range display (`18°C [====.====] 28°C`)
@@ -39,6 +40,7 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 
 ### Data & Export
 - **Multiple export formats** — JSON, CSV, YAML, and XML
+- **Pipeable JSON** (`-e json -o -`) — Write to stdout instead of a file, so `| jq` just works
 - **Smart file naming** — Automatic unique filenames when exporting multiple cities
 - **SQLite cache** — Speeds up repeated queries (geo: 7 days, weather: 30 minutes)
 - **Query history** — Track your recent weather searches (configurable limit)
@@ -129,6 +131,28 @@ bom-clima sao paulo --no-cache
 bom-clima sao paulo --verbose
 ```
 
+### Statusbar and Prompt
+```bash
+# One compact line, sized for tmux / i3status / a shell prompt
+bom-clima sao paulo --line
+# São Paulo: 🌤️ 20.3°C
+```
+
+### Pipeable JSON
+```bash
+# `-o -` writes to stdout instead of a file
+bom-clima sao paulo -e json -o - | jq '.data.current.temperature_2m'
+# 20.3
+
+# Every forecast date, one per line
+bom-clima sao paulo -e json -o - | jq -c '.data.daily.time[]'
+```
+
+On the `-o -` path stdout carries **only** the payload: the cards are
+suppressed and every human-facing message goes to stderr, so `jq` reads the
+JSON and nothing else. `--export` without `--output` still writes to
+`~/Documents/<city>.<fmt>`.
+
 ### Export Data
 ```bash
 # Export to JSON
@@ -147,8 +171,11 @@ bom-clima "sao paulo,rio" --export json -o /tmp/weather
 
 ### Configuration
 ```bash
-# Set language (persists to ~/.config/bom-clima/lang)
+# Set the language for this run only (does not persist)
 bom-clima --lang en london
+
+# Set it permanently
+bom-clima --config-set lang=en
 
 # Set persistent configuration
 bom-clima --config-set city_default='sao paulo'
@@ -175,11 +202,12 @@ bom-clima --history
 | `--aqi` | Include air quality (PM2.5, US AQI) |
 | `--at HH[:MM]` | Show the weather at a specific hour |
 | `--rain` | Show only rain windows in the next 24h |
+| `--line` | Print one compact line (statusbar/prompt) |
 | `--imperial` | Use imperial units (°F, mph, in) |
 | `--no-color` | Disable colored output |
 | `--export FMT` | Export data: json, csv, yaml, or xml (comma-separated) |
-| `--output FILE` | Output file (default: ~/Documents/<city>.<fmt>) |
-| `--lang LANG` | Set language: pt, en, es |
+| `--output FILE` | Output file (default: ~/Documents/<city>.<fmt>); `-` writes to stdout |
+| `--lang LANG` | Set the language for this run: pt, en, es |
 | `--config-set K=V` | Set persistent configuration |
 | `--config-show` | Show current configuration |
 | `--history` | Show query history |
@@ -214,66 +242,58 @@ App data follows the XDG Base Directory Specification:
 $ bom-clima sao paulo
 ```
 ```
-╭──────────── Clima atual em São paulo ────────────╮
-│ São Paulo, São Paulo, Brasil                     │
-│ Atualizado:              10:45 (30/04/2026)     │
-│ Principalmente limpo                             │
-│                                                  │
-│ Temperatura:             23.7°C                  │
-│ Sensação térmica:        27.6°C                  │
-│ Máxima hoje:             28.0°C                  │
-│ Mínima hoje:             18.0°C                  │
-│   18.0°C [====.=========] 28.0°C                │
-│                                                  │
-│ Umidade:                 65%                     │
-│ Vento:                   12 km/h ↘ (ESE)         │
-│ Rajadas:                 20 km/h                 │
-│ Pressão:                 1013 hPa                │
-│ Nuvens:                  40%                     │
-│ Ponto de orvalho:        16°C (Abafado)          │
-│ Visibilidade:            10.0 km                 │
-│                                                  │
-│ Chuva atual:             0 mm                    │
-│ Chance de chuva:         20%                     │
-│ Precipitação total:      0 mm                    │
-│ Horas de chuva:          0 h                     │
-│                                                  │
-│ Amanhecer:               06:15 (+2h 30min)       │
-│ Anoitecer:               18:45 (-3h 15min)       │
-│ Duração do dia:          12h 30min               │
-│ Índice UV:               6                       │
-│                                                  │
-│ Índice de Qualidade do Ar: 42 (Bom)             │
-│ PM2.5:                   12 µg/m³                │
-│ Fase da lua:             🌓 Crescente            │
-╰──────────────────────────────────────────────────╯
-
-╭──────────────── Próximas horas ─────────────────╮
-│ Hora  Temp    Chuva %  Vento       Cond          │
-├─────────────────────────────────────────────────┤
-│ 10:00 15.4°C  0%      10.6 km/h   Limpo         │
-│ 11:00 17.7°C  0%      10.4 km/h   Parcialmente..│
-│ 12:00 18.4°C  0%      9.8 km/h    Nublado       │
-│ 13:00 18.8°C  1%      8.3 km/h    Nublado       │
-│ 14:00 19.0°C  1%      8.1 km/h    Parcialmente..│
-│ 15:00 18.9°C  2%      9.8 km/h    Parcialmente..│
-╰─────────────────────────────────────────────────╯
-
-╭───────────────── Previsão 5 dias ────────────────╮
-│ Data        Cond               Mín    Máx  Chuva % │
-├─────────────────────────────────────────────────────┤
-│ 02/06 (Ter) Nublado            10.6°C 19.0°C  2%   │
-│ 03/06 (Qua) Nublado            12.6°C 20.0°C  6%   │
-│ 04/06 (Qui) Garoa leve         13.4°C 19.5°C  41%  │
-│ 05/06 (Sex) Nublado            11.4°C 18.8°C  2%   │
-│ 06/06 (Sáb) Nublado            11.4°C 21.2°C  0%   │
-╰─────────────────────────────────────────────────────╯
-
-╭────────────── Recomendações ──────────────╮
-│ Leve um casaco (sensação de frio)          │
-│ Baixa visibilidade — dirija com cuidado    │
-│ ✅ Sem previsão de chuva nas próximas 24h  │
-╰────────────────────────────────────────────╯
+╭────────   Clima atual em São Paulo   ─────────╮
+│ São Paulo, Brasil                             │
+│    19.1°C [=.=============] 28.2°C            │
+│ Atualizado:                21:30 (10/10/2026) │
+│ Principalmente limpo                          │
+│ Temperatura:               20.3°C             │
+│ Sensação térmica:          22.8°C             │
+│ Máxima hoje:               28.2°C             │
+│ Mínima hoje:               19.1°C             │
+│ Umidade:                   95%                │
+│ Vento:                     7.2 km/h → (E)     │
+│ Rajadas:                   23.4 km/h          │
+│ Pressão:                   1018.5 hPa         │
+│ Nuvens:                    34%                │
+│ Ponto de orvalho:          19.4°C (Abafado)   │
+│ Visibilidade:              12.1 km            │
+│ Chuva atual:               0.0 mm             │
+│ Chance de chuva:           97%                │
+│ Precipitação total:        9.1 mm             │
+│ Horas de chuva:            9.0 h              │
+│ Amanhecer:                 05:38 (-15h 52min) │
+│ Anoitecer:                 18:09 (-3h 21min)  │
+│ Duração do dia:            12h 31min          │
+│ Índice UV:                 0.0                │
+│ Índice de Qualidade do Ar: 85 (Regular)       │
+│ PM2.5:                     32.8 µg/m³         │
+│ Fase da lua:               🌘 Minguante       │
+╰───────────────────────────────────────────────╯
+╭─────────────────────── Próximas horas ───────────────────────╮
+│  Hora  ┃ Temp   ┃ Chuva % ┃ Vento    ┃ Cond                  │
+│ ━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━ │
+│  22:00 │ 20.1°C │ 9%      │ 5.5 km/h │ Principalmente limpo  │
+│  23:00 │ 19.8°C │ 4%      │ 4.5 km/h │ Principalmente limpo  │
+│  00:00 │ 19.5°C │ 2%      │ 6.2 km/h │ Parcialmente nublado  │
+│  01:00 │ 19.2°C │ 2%      │ 7.4 km/h │ Parcialmente nublado  │
+│  02:00 │ 18.9°C │ 4%      │ 6.1 km/h │ Principalmente limpo  │
+│  03:00 │ 18.8°C │ 6%      │ 6.0 km/h │ Nublado               │
+╰──────────────────────────────────────────────────────────────╯
+╭─────────────────────────── Previsão 5 dias ───────────────────────────╮
+│  Data        ┃ Cond                      ┃ Mín    ┃ Máx    ┃ Chuva %  │
+│ ━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━━ │
+│  10/10 (Sáb) │ Pancadas moderadas        │ 19.1°C │ 28.2°C │ 97%      │
+│  11/10 (Dom) │ Pancadas leves            │ 18.5°C │ 26.3°C │ 100%     │
+│  12/10 (Seg) │ Trovoada                  │ 18.3°C │ 27.0°C │ 97%      │
+│  13/10 (Ter) │ Trovoada com granizo leve │ 17.8°C │ 26.5°C │ 78%      │
+│  14/10 (Qua) │ Trovoada                  │ 19.4°C │ 27.8°C │ 92%      │
+╰───────────────────────────────────────────────────────────────────────╯
+╭──────  Alertas e recomendações  ───────╮
+│ ⚠️  Risco de tempestade! CAPE: 1870    │
+│ ⚠️  UV extremo! Índice 8               │
+│ ✔️  Leve guarda-chuva (chuva esperada) │
+╰────────────────────────────────────────╯
 ```
 
 ### Example 2: Compare Cities with Export
@@ -282,6 +302,14 @@ $ bom-clima "sao paulo,rio" --compare --export json -o /tmp/weather
 ```
 Exports to: `/tmp/weather_São_Paulo.json` and `/tmp/weather_Rio_de_Janeiro.json`
 
+### Example 3: One line for a statusbar
+```bash
+$ bom-clima sao paulo --line
+```
+```
+São Paulo: 🌤️ 20.3°C
+```
+
 ## 🏃 Running Tests
 
 ```bash
@@ -289,7 +317,10 @@ cd Bom-Clima
 python -m pytest tests/test_bom_clima.py -v
 ```
 
-All 232 tests should pass
+259 tests, covering the formatters, the cache, the CLI parser, every pairwise
+argument combination and the regression for each fix in the
+[changelog](CHANGELOG.md). The same run must be clean under
+`ruff check bom_clima/ tests/` and `mypy bom_clima/`.
 
 ## 📜 License
 

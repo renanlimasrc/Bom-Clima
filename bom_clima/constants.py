@@ -3,11 +3,15 @@
 import os
 from pathlib import Path
 
+from . import __version__
+
 BASE_URL_GEO = "https://geocoding-api.open-meteo.com/v1/search"
 BASE_URL_WEATHER = "https://api.open-meteo.com/v1/forecast"
 BASE_URL_AIR = "https://air-quality-api.open-meteo.com/v1/air-quality"
 IP_API_URL = "https://ipapi.co/json/"
-HEADERS = {"User-Agent": "BomClima/0.3.1"}
+# Derived from __version__ rather than hardcoded: the literal was still saying
+# 0.3.1 after the bump to 0.4.0, and nothing caught it.
+HEADERS = {"User-Agent": f"BomClima/{__version__}"}
 TIMEOUT = 10
 
 WMO_CODES = {
@@ -88,6 +92,11 @@ def ensure_app_dir() -> None:
 
 CACHE_TTL_GEO = 86400 * 7
 CACHE_TTL_WEATHER = 1800
+
+# Upper bound on the daily forecast. It used to be spelled out in four places
+# (the API client even said 16), so the CLI, the config sanitiser and the
+# fetcher could disagree about what "max" meant.
+MAX_FORECAST_DAYS = 15
 
 DEWPOINT_COMFORT = {
     "en": [(10, "dry", "Dry"), (16, "comfortable", "Comfortable"), (20, "muggy", "Muggy"), (999, "oppressive", "Oppressive")],

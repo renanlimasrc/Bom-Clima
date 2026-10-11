@@ -30,6 +30,14 @@ from .constants import (
 from .i18n import _current_lang, t
 
 
+def r_escape(text: object) -> str:
+    """Local import shim -- display imports this module, so importing it here
+    at module scope would be circular."""
+    from .display import r_escape as _impl
+
+    return _impl(text)
+
+
 def _to_celsius(value: float, unit_system: str) -> float:
     return (value - 32.0) * 5.0 / 9.0 if unit_system == "imperial" else value
 
@@ -80,10 +88,12 @@ def today_index(dados: dict) -> int:
     whenever past_days shifts the arrays, which is exactly what --vs-yesterday
     asks for.
     """
-    times = dados.get("daily", {}).get("time", [])
+    # `or {}`, not a .get() default: the default only covers an absent key, and
+    # Open-Meteo can send an explicit "daily": null or "current": null.
+    times = (dados.get("daily") or {}).get("time", [])
     if not times:
         return 0
-    current_time = str(dados.get("current", {}).get("time", "") or "")
+    current_time = str((dados.get("current") or {}).get("time") or "")
     today = current_time[:10]
     if today:
         for i, ts in enumerate(times):
@@ -226,8 +236,8 @@ def dewpoint_comfort(dp: float, lang: str | None = None, unit_system: str = "met
 
 
 def generate_recommendations(dados: dict, cfg: dict) -> list[str]:
-    atual = dados.get("current", {})
-    diario = dados.get("daily", {})
+    atual = dados.get("current") or {}
+    diario = (dados.get("daily") or {})
     unit = cfg.get("unit_system", "metric")
     temp = atual.get("temperature_2m", 20)
     uv = atual.get("uv_index", 0)
@@ -255,8 +265,8 @@ def generate_recommendations(dados: dict, cfg: dict) -> list[str]:
 
 
 def detect_extremes(dados: dict, unit_system: str = "metric") -> list[str]:
-    atual = dados.get("current", {})
-    diario = dados.get("daily", {})
+    atual = dados.get("current") or {}
+    diario = (dados.get("daily") or {})
     idx = today_index(dados)
     max_series = diario.get("temperature_2m_max")
     min_series = diario.get("temperature_2m_min")
@@ -275,7 +285,7 @@ def detect_extremes(dados: dict, unit_system: str = "metric") -> list[str]:
         _num(atual.get("uv_index")),
         _num(_at(diario.get("uv_index_max"), idx)),
     )
-    hourly = dados.get("hourly", {})
+    hourly = (dados.get("hourly") or {})
     cape_vals = hourly.get("cape") or []
     cape = max((_num(v) for v in cape_vals), default=0.0)
     current_time = atual.get("time", "")
@@ -310,16 +320,32 @@ def detect_extremes(dados: dict, unit_system: str = "metric") -> list[str]:
     return extremes
 
 
+def format_line(nome: str, dados: dict, cfg: dict) -> str | None:
+    """One compact line: 'Curitiba: 🌧️ 18.9°C'.
+
+    Sized for a tmux/i3status bar or a shell prompt, where the multi-card output
+    is unusable. Returns None when the payload has no current block; callers
+    (_print_line_or_card) turn that into the full card rather than a blank
+    line, so nothing is ever printed for nothing.
+    """
+    atual = dados.get("current")
+    if not isinstance(atual, dict) or atual.get("time") is None:
+        return None
+    unit = cfg.get("unit_system", "metric")
+    unit_sym = unit_symbols(unit)[0]
+    temp = _num(atual.get("temperature_2m"))
+    code = int(_num(atual.get("weather_code")))
+    _desc, icon = get_wmo(code)
+    return t("line_fmt").format(city=r_escape(nome), icon=icon, temp=temp, unit=unit_sym)
+
+
 def rain_window_summary(dados: dict) -> list[str]:
-    hourly = dados.get("hourly", {})
+    hourly = (dados.get("hourly") or {})
     if not isinstance(hourly, dict) or not hourly.get("time"):
         return []
     from datetime import datetime as dt
-    current = dados.get("current", {})
-    if current.get("time"):
-        now = dt.fromisoformat(current["time"]).replace(tzinfo=None)
-    else:
-        now = dt.now()
+    current = dados.get("current") or {}
+    now = dt.fromisoformat(current["time"]).replace(tzinfo=None) if current.get("time") else dt.now()
     probs = hourly.get("precipitation_probability") or []
     rainy: list[str] = []
     for i, ts in enumerate(hourly["time"]):
@@ -342,7 +368,7 @@ def rain_window_summary(dados: dict) -> list[str]:
 
 
 def score_days(dados: dict, unit_system: str = "metric") -> list[tuple[str, float]]:
-    diario = dados.get("daily", {})
+    diario = (dados.get("daily") or {})
     if not diario or not diario.get("time"):
         return []
     from datetime import datetime as dt
@@ -394,10 +420,10 @@ def _to_yaml(nome: str, dados: dict) -> str:
         "data:",
         "  current:",
     ]
-    atual = dados.get("current", {})
+    atual = dados.get("current") or {}
     for key, val in atual.items():
         lines.append(f"    {key}: {_yaml_safe(val)}")
-    diario = dados.get("daily", {})
+    diario = (dados.get("daily") or {})
     if diario:
         lines.append("  daily:")
         for key in diario:
@@ -413,13 +439,13 @@ def _to_xml(nome: str, dados: dict) -> str:
         f'<weather city="{xml_escape(str(nome), {chr(34): "&quot;"})}" '
         f'queried_at="{xml_escape(datetime.now().isoformat(), {chr(34): "&quot;"})}">',
     ]
-    atual = dados.get("current", {})
+    atual = dados.get("current") or {}
     if atual:
         xml.append("  <current>")
         for key, val in atual.items():
             xml.append(f"    <{key}>{xml_escape(str(val))}</{key}>")
         xml.append("  </current>")
-    diario = dados.get("daily", {})
+    diario = (dados.get("daily") or {})
     if diario:
         xml.append("  <daily>")
         for key, val in diario.items():
@@ -505,24 +531,50 @@ def _get_documents_dir() -> Path:
     return Path.home() / "Documents"
 
 
+STDOUT_TARGET = "-"
+
+
 def export_all_formats(dados: dict, nome: str, export_str: str, output: str | None) -> int:
-    """Write each requested format. Returns the number of files actually written."""
+    """Write each requested format. Returns the number of files actually written.
+
+    `output == "-"` writes to stdout instead of a file, following the convention
+    curl/jq/pip use. Nothing else may touch stdout on that path -- not the cards,
+    not the confirmation line -- otherwise `bom-clima sp -e json -o - | jq` would
+    feed jq a card followed by the payload. Those messages go to stderr instead.
+    """
     from .display import r_escape, r_print
 
     formats = [f.strip() for f in export_str.split(",") if f.strip()]
+    to_stdout = output == STDOUT_TARGET
+
+    # On the stdout path every human-facing message has to stay off stdout: the
+    # format check below runs per format, so `json,pdf` would otherwise print a
+    # valid payload followed by an error and leave jq with unparseable input.
+    def _warn(message: str) -> None:
+        if to_stdout:
+            print(message, file=sys.stderr)
+        else:
+            r_print(message)
+
     # Resolve eagerly but create lazily: _get_documents_dir() is pure (it only
     # reads), while mkdir must only run when ~/Documents is the destination.
     # Creating it unconditionally failed outright on a read-only $HOME even
     # though --output named a perfectly writable path.
-    documents = _get_documents_dir()
-    if output is None:
-        documents.mkdir(parents=True, exist_ok=True)
-    safe_name = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in nome)[:80]
+    if not to_stdout:
+        documents = _get_documents_dir()
+        if output is None:
+            documents.mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in nome)[:80]
+
     written = 0
     for fmt in formats:
         fmt = fmt.lower()
         if fmt not in ("json", "csv", "yaml", "xml"):
-            r_print(t("invalid_format").format(fmt=fmt))
+            _warn(t("invalid_format").format(fmt=fmt))
+            continue
+        if to_stdout:
+            sys.stdout.write(export_data(dados, nome, fmt))
+            written += 1
             continue
         if output:
             base, _ = os.path.splitext(output)

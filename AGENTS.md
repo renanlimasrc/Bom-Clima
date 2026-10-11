@@ -4,7 +4,7 @@
 
 **Bom Clima** is a cross-platform CLI weather application written in Python. It fetches weather data from the [Open-Meteo API](https://open-meteo.com/) and displays it in the terminal with rich formatting or plain text fallback.
 
-- **Version**: 0.3.1
+- **Version**: 0.4.1
 - **License**: GPL-2.0
 - **Python**: >= 3.10
 - **Author**: ninrod
@@ -27,7 +27,7 @@
 Bom-Clima/
 ├── bom-clima.py              # Backward-compatible entry point (delegates to bom_clima.cli:main)
 ├── bom_clima/                    # Main package
-│   ├── __init__.py           # Package init, __version__ = "0.3.1"
+│   ├── __init__.py           # Package init, __version__ = "0.4.1"
 │   ├── __main__.py           # python -m bom_clima entry point
 │   ├── api.py                # HTTP client for Open-Meteo APIs
 │   ├── cache.py              # SQLite-backed cache (geo + weather)

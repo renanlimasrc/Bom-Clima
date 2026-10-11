@@ -47,10 +47,7 @@ def save_history(history: list[dict], limit: int = 50) -> None:
         limit = int(limit)
     except (TypeError, ValueError):
         limit = 50
-    if limit <= 0:
-        history = []
-    else:
-        history = history[-limit:]
+    history = [] if limit <= 0 else history[-limit:]
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     # Write to a temp file and rename: write_text() truncates first, so an
     # interrupted write would leave invalid JSON behind.

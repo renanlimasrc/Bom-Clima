@@ -10,7 +10,7 @@ from . import __version__
 from .api import detect_location, fetch_weather_data, search_cities
 from .cache import cache_cleanup
 from .config import _sanitize, load_config, save_config
-from .constants import VALID_CONFIG_KEYS, ensure_app_dir
+from .constants import MAX_FORECAST_DAYS, VALID_CONFIG_KEYS, ensure_app_dir
 from .display import (
     HAS_RICH,
     _set_colors_enabled,
@@ -21,7 +21,15 @@ from .display import (
     r_panel,
     r_print,
 )
-from .formatters import export_all_formats, rain_window_summary, score_days, today_index, unit_symbols
+from .formatters import (
+    STDOUT_TARGET,
+    export_all_formats,
+    format_line,
+    rain_window_summary,
+    score_days,
+    today_index,
+    unit_symbols,
+)
 from .history import add_history, load_history
 from .i18n import set_lang, t
 
@@ -43,11 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("-c", "--compare", action="store_true", help=t("help_compare"))
 
     disp = p.add_argument_group(t("grp_display"))
-    disp.add_argument("-D", "--days", type=int, default=None, help=t("help_days") + " (max: 15)")
-    disp.add_argument("-H", "--hours", type=int, default=None, help=t("help_hours"))
+    disp.add_argument("-D", "--days", metavar="N", type=int, default=None,
+                      help=t("help_days") + f" (max: {MAX_FORECAST_DAYS})")
+    disp.add_argument("-H", "--hours", metavar="N", type=int, default=None, help=t("help_hours"))
     disp.add_argument("-q", "--aqi", action="store_true", help=t("help_aqi"))
     disp.add_argument("--at", metavar="HH[:MM]", default=None, help=t("help_at"))
     disp.add_argument("--rain", action="store_true", help=t("help_rain"))
+    disp.add_argument("--line", action="store_true", help=t("help_line"))
     disp.add_argument("-i", "--imperial", action="store_true", help=t("help_imperial"))
     disp.add_argument("-n", "--no-color", action="store_true", help=t("help_no_color"))
 
@@ -61,11 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     smart.add_argument("--vs-yesterday", action="store_true", help=t("help_vs_yesterday"))
 
     export = p.add_argument_group(t("grp_export"))
-    export.add_argument("-e", "--export", help=t("help_export_fmt") + " (json, csv, yaml, xml)")
-    export.add_argument("--output", "-o", help=t("help_output"))
+    export.add_argument("-e", "--export", metavar="FMT", help=t("help_export_fmt"))
+    export.add_argument("--output", "-o", metavar="FILE", help=t("help_output"))
 
     cfg_grp = p.add_argument_group(t("grp_config"))
-    cfg_grp.add_argument("-l", "--lang", choices=["pt", "en", "es"], help=t("help_lang"))
+    cfg_grp.add_argument("-l", "--lang", metavar="LANG", choices=["pt", "en", "es"], help=t("help_lang"))
     cfg_grp.add_argument("-s", "--config-set", metavar="KEY=VALUE", action="append", help=t("help_config_set"))
     cfg_grp.add_argument("-S", "--config-show", action="store_true", help=t("help_config_show"))
 
@@ -76,59 +86,125 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def show_help() -> None:
-    lines = []
+# Emoji per argument group, keyed by the *translated* group title -- argparse
+# stores whatever t() returned at build time, so the lookup below has to resolve
+# the same way. The icons stay out of the locale files.
+_GROUP_ICON_KEYS = {
+    "grp_search": "\U0001f4cd",
+    "grp_display": "\U0001f4ca",
+    "grp_modes": "\U0001f504",
+    "grp_smart": "\U0001f4a1",
+    "grp_export": "\U0001f4be",
+    "grp_config": "\u2699\ufe0f",
+    "grp_info": "\u2139\ufe0f",
+}
+
+
+_EXAMPLE_KEYS = (
+    "help_ex_simple",
+    "help_ex_compare",
+    "help_ex_imperial",
+    "help_ex_detect",
+    "help_ex_export",
+    "help_ex_lang",
+    "help_ex_config",
+)
+
+
+def _action_invocation(action: argparse.Action) -> str:
+    """Render one action as '-d, --detect' or '-D, --days N'.
+
+    argparse keeps the value placeholder out of option_strings, so it has to be
+    re-attached here -- exactly the bit that used to drift between the parser and
+    the hand-written help copy.
+    """
+    placeholder = _metavar_text(action)
+    if not action.option_strings:
+        # Positional: argparse has no metavar for it, and nargs="*" reads as
+        # "CITY..." rather than a bare "CITY".
+        name = placeholder or action.dest.upper()
+        return f"{name}..." if action.nargs == "*" else name
+    # Short first: argparse preserves the order they were declared in, and
+    # "--verbose, -V" is backwards next to every other entry.
+    parts = sorted(action.option_strings, key=lambda o: (o.startswith("--"), o))
+    invocation = ", ".join(parts)
+    if action.nargs == 0:
+        return invocation
+    return f"{invocation} {placeholder or action.dest.upper()}"
+
+
+def _metavar_text(action: argparse.Action) -> str:
+    """argparse allows a metavar to be a tuple, one entry per name.
+
+    None of our flags use that form, but joining it keeps the help reader from
+    blowing up with an AttributeError the day one does.
+    """
+    if isinstance(action.metavar, tuple):
+        return " ".join(action.metavar)
+    return action.metavar or ""
+
+
+def _collect_help_rows(p: argparse.ArgumentParser) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Read every group and action out of the parser, in declaration order."""
+    # argparse stores the *translated* title, so the icon lookup is resolved
+    # through t() too rather than keying on the raw translation key.
+    icons = {t(k): v for k, v in _GROUP_ICON_KEYS.items()}
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
+    for group in p._action_groups:
+        rows = [
+            (_action_invocation(action), action.help or "")
+            for action in group._group_actions
+            if action.help
+        ]
+        if not rows:
+            continue
+        title = group.title or ""
+        sections.append((f"{icons.get(title, '•')} {title.upper()}", rows))
+    return sections
+
+
+def show_help(parser: argparse.ArgumentParser | None = None) -> None:
+    """Render the guide, reading the option list from the parser itself.
+
+    This used to spell out all ~27 options by hand in parallel to
+    build_parser(), which meant two sources of truth: a new flag needed two
+    edits, and the hand-written copy had already drifted (a broken column and a
+    mid-word line wrap). Deriving the rows makes a flag show up here by itself.
+    """
+    p = parser or build_parser()
+    sections = _collect_help_rows(p)
+
+    examples = []
+    for key in _EXAMPLE_KEYS:
+        cmd, _, comment = t(key).partition("#")
+        examples.append((cmd.rstrip(), comment.strip()))
+    ex_col = max((len(cmd) for cmd, comment in examples if comment), default=0)
+
+    lines: list[str] = []
     title = t("help_title")
     sep = "\u2014"
-    lines.append(f"  \U0001f324\ufe0f  Bom Clima v{__version__} {sep} {title.split(sep)[1].strip() if sep in title else title}")
+    subtitle = title.split(sep)[1].strip() if sep in title else title
+    lines.append(f"  \U0001f324\ufe0f  Bom Clima v{__version__} {sep} {subtitle}")
     lines.append("")
     lines.append(f"  {t('help_usage')}")
     lines.append("    bom-clima [CITY...] [OPTIONS]")
     lines.append("")
-    lines.append(f"  \U0001f4cd {t('help_search')}")
-    lines.append(f"    CITY...           {t('help_search_city')}")
-    lines.append(f"    -d, --detect      {t('help_search_detect')}")
-    lines.append(f"    -c, --compare     {t('help_search_compare')}")
-    lines.append("")
-    lines.append(f"  \U0001f4ca {t('help_display')}")
-    lines.append(f"    -D, --days N      {t('help_display_days')}")
-    lines.append(f"    -H, --hours N     {t('help_display_hours')}")
-    lines.append(f"    -q, --aqi         {t('help_display_aqi')}")
-    lines.append(f"    --at HH[:MM]      {t('help_display_at')}")
-    lines.append(f"    --rain            {t('help_display_rain')}")
-    lines.append(f"    -i, --imperial    {t('help_display_imperial')}")
-    lines.append(f"    -n, --no-color    {t('help_display_color')}")
-    lines.append("")
-    lines.append(f"  \U0001f504 {t('help_modes')}")
-    lines.append(f"    -y, --history     {t('help_modes_history')}")
-    lines.append(f"    --no-cache        {t('no_cache_help')}")
-    lines.append(f"    -V, --verbose     {t('verbose_help')}")
-    lines.append("")
-    lines.append(f"  \U0001f4a1 {t('grp_smart')}")
-    lines.append(f"    --best-day        {t('help_best_day')}")
-    lines.append(f"    --vs-yesterday    {t('help_vs_yesterday')}")
-    lines.append("")
-    lines.append(f"  \U0001f4be {t('help_export')}")
-    lines.append(f"    -e, --export FMT  {t('help_export_format')}")
-    lines.append(f"    -o, --output FILE {t('help_export_output')}")
-    lines.append("")
-    lines.append(f"  \u2699\ufe0f  {t('help_config')}")
-    lines.append(f"    -l, --lang LANG   {t('help_config_lang')}")
-    lines.append(f"    -s, --config-set K=V  {t('help_config_set')}")
-    lines.append(f"    -S, --config-show {t('help_config_show')}")
-    lines.append("")
-    lines.append(f"  \u2139\ufe0f  {t('help_info')}")
-    lines.append(f"    -h, --help        {t('help_info_help')}")
-    lines.append(f"    -v, --version     {t('help_info_version')}")
-    lines.append("")
+
+    for heading, rows in sections:
+        col = max(len(inv) for inv, _ in rows)
+        lines.append(f"  {heading}")
+        for inv, desc in rows:
+            # Pad on the invocation alone. Descriptions are the long part and
+            # must all start on the same column, or the panel wraps mid-word.
+            lines.append(f"    {inv.ljust(col)}  {desc}")
+        lines.append("")
+
     lines.append(f"  {t('help_examples')}")
-    lines.append(f"    {t('help_ex_simple')}")
-    lines.append(f"    {t('help_ex_compare')}")
-    lines.append(f"    {t('help_ex_imperial')}")
-    lines.append(f"    {t('help_ex_detect')}")
-    lines.append(f"    {t('help_ex_export')}")
-    lines.append(f"    {t('help_ex_lang')}")
-    lines.append(f"    {t('help_ex_config')}")
+    for cmd, comment in examples:
+        if comment:
+            lines.append(f"    {cmd.ljust(ex_col)}  # {comment}")
+        else:
+            lines.append(f"    {cmd}")
     lines.append("")
 
     content = "\n".join(lines)
@@ -138,7 +214,8 @@ def show_help() -> None:
 
         from .display import console as rich_console
         assert rich_console is not None
-        rich_console.print(Panel(content, title=f"\U0001f324\ufe0f  {t('help_title')}", border_style="bold cyan"))
+        panel_title = f"\U0001f324\ufe0f  {t('help_title')}"
+        rich_console.print(Panel(content, title=panel_title, border_style="bold cyan"))
     else:
         print("=" * 60)
         print(f"  \U0001f324\ufe0f  {t('help_title')}")
@@ -194,8 +271,8 @@ def _coerce_config_value(key: str, raw: str) -> Any:
     elif key in _INT_CONFIG_KEYS:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError("expected an integer")
-        if key == "forecast_days" and not 1 <= value <= 15:
-            raise ValueError("expected an integer between 1 and 15")
+        if key == "forecast_days" and not 1 <= value <= MAX_FORECAST_DAYS:
+            raise ValueError(f"expected an integer between 1 and {MAX_FORECAST_DAYS}")
         if key == "forecast_hours" and value < 1:
             raise ValueError("expected an integer of at least 1")
         if key == "history_limit" and value < 0:
@@ -238,14 +315,16 @@ def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dic
         save_config({**load_config(), **pending})
         cfg.update(pending)
         if pending.get("lang") in ("pt", "en", "es"):
-            set_lang(pending["lang"])
+            # The only caller that persists: --config-set is the documented way
+            # to make a language stick.
+            set_lang(pending["lang"], persist=True)
 
     if args.imperial:
         cfg["unit_system"] = "imperial"
     if args.hours is not None:
         cfg["forecast_hours"] = args.hours
     if args.days is not None:
-        cfg["forecast_days"] = min(args.days, 15)
+        cfg["forecast_days"] = min(args.days, MAX_FORECAST_DAYS)
     if args.no_color:
         cfg["color"] = False
     if args.lang:
@@ -279,12 +358,15 @@ def _export_city_data(
     output: str | None,
 ) -> int:
     """Export weather data for a city, handling unique filenames for multi-city exports."""
-    if output:
+    dest: str | None = None
+    if output and output != STDOUT_TARGET:
         base, ext = os.path.splitext(output)
         safe_nome = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in nome)[:80]
         dest = f"{base}_{safe_nome}{ext or '.json'}"
     else:
-        dest = None
+        # "-" reaches export_all_formats() untouched; splitext() on it would
+        # build a literal file named "-_Sao_Paulo.json" instead of streaming.
+        dest = output
     return export_all_formats(dados, nome, export_fmt, dest)
 
 
@@ -303,6 +385,76 @@ def _do_export(dados: dict, nome: str, fmt: str, output: str | None, per_city: b
         sys.exit(1)
 
 
+def _print_line_or_card(
+    nome: str,
+    dados: dict,
+    cfg: dict[str, Any],
+    city_info: dict | None,
+    at_hour: tuple[int, int] | None,
+) -> None:
+    """Print the `--line` summary, falling back to the full card.
+
+    format_line() returns None when the payload has no usable `current` block.
+    That is rare -- fetch_weather_data raises on a real API failure -- but
+    printing nothing at all leaves the user with no output and no explanation,
+    which is a worse failure than a verbose one. The fallback renders the card
+    the user would have seen anyway.
+    """
+    line = format_line(nome, dados, cfg)
+    if line is not None:
+        # Plain print: --line output is meant to be captured by a statusline,
+        # and Rich would both reformat and pad it.
+        print(line)
+        return
+    print(t("line_unavailable").format(city=nome), file=sys.stderr)
+    display_weather(nome, dados, cfg, city_info=city_info, at_hour=at_hour)
+
+
+def _render_one(
+    nome: str,
+    dados: dict,
+    cidade_info: dict,
+    cfg: dict[str, Any],
+    args: argparse.Namespace,
+    at_hour: tuple[int, int] | None,
+    history_city: str,
+    per_city_export: bool,
+) -> None:
+    """Render a single city and run everything that follows a fetch.
+
+    detect / single / multi all ended with the same six statements in the same
+    order; keeping the order here is the point, so a change to one flag can no
+    longer quietly run its export before its own card. The --compare path does
+    not come through here on purpose: it renders with display_comparison()
+    instead of display_weather().
+
+    history_city is the raw command-line argument, not the geocoded `nome`:
+    history stores what the user typed, which is what they will type again.
+
+    Two flags replace the cards entirely. `--line` prints one compact line, and
+    `-o -` streams the export to stdout -- in both cases a rendered card would
+    land in the middle of what the caller asked to pipe, so it is skipped.
+    """
+    machine_output = getattr(args, "line", False) or args.output == STDOUT_TARGET
+
+    if machine_output:
+        if args.export:
+            _do_export(dados, nome, args.export, args.output, per_city=per_city_export)
+        else:
+            _print_line_or_card(nome, dados, cfg, cidade_info, at_hour)
+        add_history(history_city, cidade_info["latitude"], cidade_info["longitude"])
+        return
+
+    display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
+    _show_best_day(dados, cfg, args)
+    _show_rain(dados, cfg, args)
+    if args.vs_yesterday:
+        _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
+    add_history(history_city, cidade_info["latitude"], cidade_info["longitude"])
+    if args.export:
+        _do_export(dados, nome, args.export, args.output, per_city=per_city_export)
+
+
 def _show_best_day(dados: dict, cfg: dict[str, Any], args: argparse.Namespace) -> None:
     """Render the best-day card. Available on every fetch path, not just the
     single-city one, where --best-day used to be silently ignored."""
@@ -318,7 +470,7 @@ def _show_best_day(dados: dict, cfg: dict[str, Any], args: argparse.Namespace) -
 
 
 def _show_vs_yesterday(dados: dict, unit_system: str = "metric") -> None:
-    daily = dados.get("daily", {})
+    daily = (dados.get("daily") or {})
     temps_max = daily.get("temperature_2m_max", [])
     idx = today_index(dados)
     if idx < 1 or len(temps_max) <= idx:
@@ -371,43 +523,39 @@ def _parse_at(raw: str | None) -> tuple[int, int] | None:
     return hour, minute
 
 
-def _describe_candidate(c: dict) -> str:
-    bits = [str(c.get("name", "?"))]
-    if c.get("admin1"):
-        bits.append(str(c["admin1"]))
-    if c.get("country"):
-        bits.append(str(c["country"]))
-    coords = ""
-    if c.get("latitude") is not None and c.get("longitude") is not None:
-        coords = f" ({c['latitude']:.2f}, {c['longitude']:.2f})"
-    return ", ".join(bits) + coords
+def _refine_hint(city: str, candidates: list[dict]) -> str:
+    """The one-line hint shown for an ambiguous query.
+
+    Only the tip survives: naming the chosen city and listing the alternatives
+    re-stated what the card right below already shows, and the duplicate felt
+    like an error. What is left is the actionable half -- how to ask for the
+    other place -- so the user can still reach a different match.
+    """
+    admin1 = candidates[1].get("admin1")
+    if not admin1:
+        return ""
+    return t("city_refine_hint").format(example=f"{city.strip()}, {admin1}")
 
 
 def _resolve_city(city: str, no_cache: bool) -> dict:
     """Geocode, always taking the first (most populous) candidate.
 
-    When the query is ambiguous the alternatives are listed on stderr, with a
-    hint showing how to refine (city + state, comma-separated — the only form
-    the geocoding API understands). There is deliberately no prompt: GeoNames
-    holds phantom micro-localities (e.g. a population-less "Guarulhos" in Rio
-    de Janeiro), so asking would keep suggesting places that don't exist.
+    When the query is ambiguous a hint goes to stderr showing how to refine
+    (city + state, comma-separated -- the only form the geocoding API
+    understands). There is deliberately no prompt: GeoNames holds phantom
+    micro-localities (e.g. a population-less "Guarulhos" in Rio de Janeiro), so
+    asking would keep suggesting places that don't exist.
+
+    stderr rather than stdout because --line and `-o -` hand stdout to a
+    statusline or a pipe, and a note about other matches would corrupt both.
     """
     candidates = search_cities(city, no_cache=no_cache)
     if len(candidates) <= 1:
         return candidates[0]
-    picked = candidates[0]
-    alternatives = "; ".join(_describe_candidate(c) for c in candidates[1:])
-    lines = [
-        t("city_ambiguous").format(query=city.strip(), name=picked.get("name", "?")),
-        t("city_alternatives").format(alternatives=alternatives),
-    ]
-    admin1 = candidates[1].get("admin1")
-    if admin1:
-        lines.append(t("city_refine_hint").format(example=f"{city.strip()}, {admin1}"))
-    # Plain print: this is a note, not a card, and Rich would parse any '['
-    # in API place names as markup tags.
-    print("\n".join(lines), file=sys.stderr)
-    return picked
+    hint = _refine_hint(city, candidates)
+    if hint:
+        print(hint, file=sys.stderr)
+    return candidates[0]
 
 
 def _fetch_and_display(
@@ -482,7 +630,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.help:
-        show_help()
+        show_help(parser)
         sys.exit(0)
 
     _validate_positive(args.days, "--days")
@@ -523,7 +671,16 @@ def main() -> None:
             city_name = loc.get("city", t("detect_label"))
             if loc.get("country"):
                 city_name += f", {loc['country']}"
-            print(f"\U0001f4cd {t('detect_label')}: {city_name} (lat: {loc['lat']}, lon: {loc['lon']})")
+            if args.output == STDOUT_TARGET or getattr(args, "line", False):
+                # Machine output owns stdout; the "here is where you are" note
+                # is a human aside and would break a pipe.
+                print(
+                    f"\U0001f4cd {t('detect_label')}: {city_name} "
+                    f"(lat: {loc['lat']}, lon: {loc['lon']})",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"\U0001f4cd {t('detect_label')}: {city_name} (lat: {loc['lat']}, lon: {loc['lon']})")
             past_days = 1 if getattr(args, "vs_yesterday", False) else 0
             try:
                 dados = fetch_weather_data(
@@ -538,14 +695,16 @@ def main() -> None:
             except ValueError as e:
                 print(f"\n{e}\n")
                 sys.exit(1)
-            display_weather(city_name, dados, cfg, at_hour=at_hour)
-            _show_best_day(dados, cfg, args)
-            _show_rain(dados, cfg, args)
-            if args.vs_yesterday:
-                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
-            add_history(city_name, loc["lat"], loc["lon"])
-            if args.export:
-                _do_export(dados, city_name, args.export, args.output, per_city=False)
+            _render_one(
+                city_name,
+                dados,
+                {"latitude": loc["lat"], "longitude": loc["lon"]},
+                cfg,
+                args,
+                at_hour,
+                city_name,
+                per_city_export=False,
+            )
             sys.exit(0)
         else:
             print(f"\u26a0\ufe0f {t('detect_fail')}")
@@ -578,6 +737,7 @@ def main() -> None:
                 sys.exit(1)
 
     if args.compare and len(cities) > 1:
+        machine_output = getattr(args, "line", False) or args.output == STDOUT_TARGET
         resultados: list[tuple[str, dict, dict[str, Any], dict | None]] = []
         falhas: list[str] = []
         for city in cities:
@@ -590,19 +750,24 @@ def main() -> None:
         if not resultados:
             print("\n".join(falhas))
             sys.exit(1)
-        display_comparison(resultados)
+        if not machine_output:
+            display_comparison(resultados)
         # These flags were documented as city-agnostic but only the multi-city
-        # branch rendered them.
-        if args.vs_yesterday:
-            for _nome, dados, _cfg, _info in resultados:
-                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
-        for _nome, dados, _cfg, _info in resultados:
+        # branch rendered them. One pass, in the same order as _render_one():
+        # best-day, then rain, then vs-yesterday.
+        for _nome, dados, _cfg, info in resultados:
+            if machine_output:
+                if args.export:
+                    _do_export(dados, _nome, args.export, args.output, per_city=True)
+                else:
+                    _print_line_or_card(_nome, dados, cfg, info, at_hour)
+                continue
             _show_best_day(dados, cfg, args)
-        for _nome, dados, _cfg, _info in resultados:
             _show_rain(dados, cfg, args)
-        if args.export:
-            for nome, dados, _, _ in resultados:
-                _do_export(dados, nome, args.export, args.output, per_city=True)
+            if args.vs_yesterday:
+                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
+            if args.export:
+                _do_export(dados, _nome, args.export, args.output, per_city=True)
         if falhas:
             # Partial success is worth showing; only fail the run if nothing worked.
             print("\n".join(falhas), file=sys.stderr)
@@ -613,14 +778,8 @@ def main() -> None:
         except ValueError as e:
             print(f"\n{e}\n")
             sys.exit(1)
-        display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
-        _show_best_day(dados, cfg, args)
-        _show_rain(dados, cfg, args)
-        if args.vs_yesterday:
-            _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
-        add_history(cities[0], cidade_info["latitude"], cidade_info["longitude"])
-        if args.export:
-            _do_export(dados, nome, args.export, args.output, per_city=False)
+        _render_one(nome, dados, cidade_info, cfg, args, at_hour,
+                    cities[0], per_city_export=False)
     else:
         for city in cities:
             try:
@@ -628,11 +787,5 @@ def main() -> None:
             except ValueError as e:
                 print(f"\n{e}\n")
                 sys.exit(1)
-            display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
-            _show_best_day(dados, cfg, args)
-            _show_rain(dados, cfg, args)
-            if args.vs_yesterday:
-                _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
-            add_history(city, cidade_info["latitude"], cidade_info["longitude"])
-            if args.export:
-                _do_export(dados, nome, args.export, args.output, per_city=True)
+            _render_one(nome, dados, cidade_info, cfg, args, at_hour,
+                        city, per_city_export=True)

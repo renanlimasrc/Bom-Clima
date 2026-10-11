@@ -104,11 +104,20 @@ def _current_lang() -> str:
     return "en"
 
 
-def set_lang(lang: str) -> None:
+def set_lang(lang: str, persist: bool = False) -> None:
+    """Apply a language for this run.
+
+    persist=False by default: `--lang` used to write ~/.config/bom-clima/lang on
+    every call, so a one-off `bom-clima sp --lang en` silently overrode the
+    desktop locale for every later run. Only an explicit `--config-set lang=`
+    should reach that far, which is what the one caller below passes.
+    """
     global _current_lang_cache
     if lang not in _SUPPORTED_LANGS:
         return
     _current_lang_cache = lang
+    if not persist:
+        return
     try:
         LANG_FILE.parent.mkdir(parents=True, exist_ok=True)
         LANG_FILE.write_text(lang, "utf-8")

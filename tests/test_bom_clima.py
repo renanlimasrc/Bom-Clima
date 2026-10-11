@@ -15,6 +15,9 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <https://www.gnu.org/licenses/>.
 
+import argparse
+import copy
+import itertools
 import json
 import os
 import sqlite3
@@ -518,6 +521,15 @@ class TestCache:
 
 
 class TestFormatWeatherBlock:
+    @staticmethod
+    def _row_for(block, label):
+        """The rendered line carrying `label`, so an assertion about a value
+        cannot be satisfied by that value appearing on some other row."""
+        for line in block.splitlines():
+            if label in line:
+                return line
+        raise AssertionError(f"linha '{label}' ausente do card")
+
     def test_basic_block(self, mock_weather_response):
         cfg = {"unit_system": "metric", "forecast_days": 5, "forecast_hours": 12}
         block = format_weather_block("Sao Paulo", mock_weather_response, cfg)
@@ -530,6 +542,108 @@ class TestFormatWeatherBlock:
         block = format_weather_block("Sao Paulo", mock_weather_with_aqi, cfg)
         assert "Air Quality Index" in block
         assert "45" in block
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            pytest.param(lambda d: d.pop("current"), id="ausente"),
+            pytest.param(lambda d: d.update(current={}), id="vazio"),
+            pytest.param(lambda d: d.update(current=None), id="null"),
+            pytest.param(lambda d: d["current"].update(time=None), id="time-null"),
+            pytest.param(lambda d: d["current"].update(time="nao-e-data"), id="time-lixo"),
+            pytest.param(lambda d: d["current"].update(temperature_2m=None), id="temp-null"),
+        ],
+    )
+    def test_survives_a_degraded_current_block(self, mock_weather_response, mutate):
+        """Open-Meteo can answer 200 with "current" missing, empty or null, and
+        its cells are individually nullable. --line falls back to this function
+        exactly when that happens, so every one of these used to raise
+        KeyError/TypeError/AttributeError instead of rendering."""
+        dados = copy.deepcopy(mock_weather_response)
+        mutate(dados)
+        cfg = {"unit_system": "metric", "forecast_days": 5, "forecast_hours": 12}
+        block = format_weather_block("Sao Paulo", dados, cfg)
+        assert "Sao Paulo" in block
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            pytest.param(lambda d: d.pop("current"), id="ausente"),
+            pytest.param(lambda d: d.update(current={}), id="vazio"),
+            pytest.param(lambda d: d.update(current=None), id="null"),
+        ],
+    )
+    def test_degraded_current_does_not_invent_a_reading(self, mock_weather_response, mutate):
+        """A .get() default is not a neutral placeholder here: WMO 0 is "Clear
+        sky", rain 0 is "it is not raining", and a 0 degC marker pinned to the
+        daily minimum reads as a real observation. With no "current" block the
+        card must say nothing about current conditions, not assert sunny."""
+        dados = copy.deepcopy(mock_weather_response)
+        mutate(dados)
+        cfg = {"unit_system": "metric", "forecast_days": 5, "forecast_hours": 12}
+        block = format_weather_block("Sao Paulo", dados, cfg)
+
+        for description in get_wmo(0, "en")[0], t("rain_now"), t("temperature"):
+            assert description not in block, f"linha '{description}' sem leitura"
+        # The bar is what carries the current reading; without one it is dropped.
+        assert "°C [" not in block
+        # Rows that come from `daily` are real and must survive.
+        assert t("max_today") in block and t("min_today") in block
+
+    def test_weather_code_zero_still_renders_clear_sky(self, mock_weather_response):
+        """WMO 0 is a real reading, so the guard tests presence, not truthiness."""
+        dados = copy.deepcopy(mock_weather_response)
+        dados["current"]["weather_code"] = 0
+        block = format_weather_block("Sao Paulo", dados, {"unit_system": "metric"})
+        assert get_wmo(0, "en")[0] in block
+
+    def test_rain_zero_still_renders(self, mock_weather_response):
+        """Same for rain: 0.0 mm is a measurement, absent is not."""
+        dados = copy.deepcopy(mock_weather_response)
+        dados["current"]["rain"] = 0.0
+        block = format_weather_block("Sao Paulo", dados, {"unit_system": "metric"})
+        assert "0.0 mm" in self._row_for(block, t("rain_now"))
+
+    def test_empty_timestamp_renders_na_not_a_blank(self, mock_weather_response):
+        """The `raw_time or "N/A"` branch: a blank cell used to leave the row
+        empty, which is not the same as saying the timestamp is unavailable."""
+        dados = copy.deepcopy(mock_weather_response)
+        dados["current"]["time"] = ""
+        block = format_weather_block("Sao Paulo", dados, {"unit_system": "metric"})
+        assert self._row_for(block, t("updated")).strip().endswith("N/A")
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            pytest.param(lambda d: d.pop("daily"), id="ausente"),
+            pytest.param(lambda d: d.update(daily={}), id="vazio"),
+            pytest.param(lambda d: d.update(daily=None), id="null"),
+            pytest.param(lambda d: d.update(daily={"time": d["daily"]["time"]}), id="sem-series"),
+            pytest.param(lambda d: d.pop("hourly"), id="hourly-ausente"),
+            pytest.param(lambda d: d.update(hourly=None), id="hourly-null"),
+        ],
+    )
+    def test_survives_a_degraded_daily_block(self, mock_weather_response, mutate):
+        """Same class as the current-block case one test above: daily series can
+        arrive short, empty or null, and every one of these used to raise
+        KeyError/AttributeError -- diario[...][idx] does not tolerate a missing
+        key the way _at()/get() do."""
+        dados = copy.deepcopy(mock_weather_response)
+        mutate(dados)
+        cfg = {"unit_system": "metric", "forecast_days": 5, "forecast_hours": 12}
+        block = format_weather_block("Sao Paulo", dados, cfg)
+        assert "Sao Paulo" in block
+
+    def test_degraded_daily_omits_daily_rows_but_keeps_current(self, mock_weather_response):
+        """Without daily there is no min/max, rain-chance or sunrise to report;
+        the current-conditions rows that remain must still render."""
+        dados = copy.deepcopy(mock_weather_response)
+        dados.pop("daily")
+        block = format_weather_block("Sao Paulo", dados, {"unit_system": "metric"})
+        assert t("temperature") in block
+        for label in (t("max_today"), t("min_today"), t("rain_chance"), t("sunrise"), t("sunset")):
+            assert label not in block, f"linha '{label}' sem serie daily"
+        assert "°C [" not in block
 
     def test_uses_today_index_with_past_days(self):
         dados = {
@@ -645,9 +759,22 @@ class TestNoColorMarkup:
 
 
 class TestI18n:
-    def test_set_lang(self):
+    def test_set_lang_applies_without_persisting(self):
+        """`--lang` must not reach ~/.config/bom-clima/lang.
+
+        It used to, so a one-off `bom-clima sp --lang en` overrode the desktop
+        locale for every later run -- and the file it wrote shadowed LANG.
+        """
+        reset_lang_cache()
         with patch("bom_clima.i18n.LANG_FILE") as mock_file:
-            set_lang("en")
+            set_lang("pt")
+            mock_file.write_text.assert_not_called()
+        assert _current_lang() == "pt"
+        reset_lang_cache()
+
+    def test_set_lang_persists_when_asked(self):
+        with patch("bom_clima.i18n.LANG_FILE") as mock_file:
+            set_lang("en", persist=True)
             # The encoding is explicit: without it the file is written in the
             # process's preferred encoding, which is not utf-8 on Windows.
             mock_file.write_text.assert_called_once_with("en", "utf-8")
@@ -1066,14 +1193,11 @@ class TestScoreDays:
 # Argument Combination Tests
 # ---------------------------------------------------------------------------
 
-import argparse
-import itertools
-
 ALL_BOOLEAN_FLAGS = [
     "--detect", "--compare", "--aqi", "--imperial",
     "--no-color", "--history", "--no-cache", "--verbose",
     "--best-day", "--vs-yesterday", "--config-show", "--help", "--version",
-    "--rain",
+    "--rain", "--line",
 ]
 
 ALL_VALUE_ARGS = [
@@ -1199,7 +1323,7 @@ class TestArgumentParsingCombinations:
         parser = build_parser()
         combos = _build_all_pairs() + TRIPLE_COMBOS + EDGE_VALUE_COMBOS
         for combo in combos:
-            ns = parser.parse_args(["sao paulo"] + combo)
+            ns = parser.parse_args(["sao paulo", *combo])
             assert isinstance(ns, argparse.Namespace)
 
 
@@ -1251,7 +1375,7 @@ class TestArgumentMainCombinations:
         ]
         for city, combos in scenarios:
             for combo in combos:
-                argv = ["bom-clima"] + city + combo
+                argv = ["bom-clima", *city, *combo]
                 with patch("sys.argv", argv):
                     try:
                         main()
@@ -2224,9 +2348,10 @@ class TestDisambiguationRegressions:
         with patch.object(api_mod, "cache_get_geo", return_value=dict(self._cands()[0])):
             assert api_mod.search_cities("springfield") == [self._cands()[0]]
 
-    def test_ambiguous_picks_first_and_lists_alternatives(self, capsys):
-        """No prompt: the most populous candidate wins, and stderr shows the
-        alternatives with their states plus how to refine the query."""
+    def test_ambiguous_picks_first_and_shows_only_the_hint(self, capsys):
+        """No prompt: the most populous candidate wins, and stderr carries the
+        refine hint alone. Naming the pick and listing every alternative just
+        repeated what the card below already showed."""
         from bom_clima.cli import _resolve_city
 
         def _no_prompt(_prompt=""):
@@ -2239,7 +2364,7 @@ class TestDisambiguationRegressions:
             picked = _resolve_city("springfield", no_cache=True)
         assert picked["admin1"] == "Illinois"
         err = capsys.readouterr().err
-        assert "Missouri" in err and "Ohio" in err
+        assert err.strip().count("\n") == 0, "a dica deve ser uma unica linha"
         assert "springfield, Missouri" in err
 
     def test_single_candidate_is_silent(self, capsys):
@@ -2250,15 +2375,29 @@ class TestDisambiguationRegressions:
         assert picked["admin1"] == "Illinois"
         assert capsys.readouterr().err == ""
 
-    def test_hint_omitted_without_admin1(self, capsys):
+    def test_no_hint_and_no_output_without_admin1(self, capsys):
+        """With nothing to refine towards there is no tip to give, and no
+        'multiple matches' preamble left over to print on its own."""
         from bom_clima.cli import _resolve_city
 
         cands = [dict(self._cands()[0]), {"name": "Nowhere"}]
         with patch("bom_clima.cli.search_cities", return_value=cands):
             _resolve_city("nowhere", no_cache=True)
-        err = capsys.readouterr().err
-        assert "Nowhere" in err
-        assert "Tip:" not in err and "Dica:" not in err and "Consejo:" not in err
+        assert capsys.readouterr().err == ""
+
+    def test_hint_follows_the_desktop_language(self, capsys):
+        """The tip is user-facing text and must come out in pt on a pt desktop."""
+        from bom_clima.cli import _resolve_city
+
+        with (
+            patch("bom_clima.cli.search_cities", return_value=self._cands()),
+            patch.dict(os.environ, {"LANG": "pt_BR.UTF-8"}),
+        ):
+            reset_lang_cache()
+            _resolve_city("springfield", no_cache=True)
+            err = capsys.readouterr().err
+            assert "Dica:" in err, err
+        reset_lang_cache()
 
     def test_markup_in_names_does_not_crash_note(self, capsys):
         """The note goes through plain print (not Rich), so '[' in API place
@@ -2286,3 +2425,386 @@ class TestDisambiguationRegressions:
             pytest.raises(ValueError, match="not found"),
         ):
             search_cities("sp", no_cache=True)
+
+
+# ---------------------------------------------------------------------------
+# --line: one compact line for a statusbar or prompt
+# ---------------------------------------------------------------------------
+
+
+class TestLineOutput:
+    """`--line` exists to be captured, so it prints nothing but the line."""
+
+    def test_format_matches_expected_shape(self, mock_weather_response):
+        from bom_clima.formatters import format_line
+
+        line = format_line("Curitiba", mock_weather_response, {"unit_system": "metric"})
+        assert line == "Curitiba: 🌤️ 25.5°C"
+
+    def test_imperial_uses_fahrenheit(self, mock_weather_response):
+        from bom_clima.formatters import format_line
+
+        line = format_line("NYC", mock_weather_response, {"unit_system": "imperial"})
+        assert line is not None and line.endswith("°F")
+
+    def test_null_temperature_degrades_to_zero_not_a_crash(self, mock_weather_response):
+        """Open-Meteo sends null for cells it has no sensor for."""
+        from bom_clima.formatters import format_line
+
+        mock_weather_response["current"]["temperature_2m"] = None
+        line = format_line("X", mock_weather_response, {"unit_system": "metric"})
+        assert line is not None and "0°C" in line
+
+    def test_missing_current_block_returns_none(self):
+        """None tells the caller to fall back to the cards, not print a blank."""
+        from bom_clima.formatters import format_line
+
+        assert format_line("X", {}, {"unit_system": "metric"}) is None
+
+    def test_missing_current_block_falls_back_to_the_card(self, mock_geo_response, mock_weather_response, capsys):
+        """A blank stdout is the worst outcome for --line: the user gets no
+        weather and no explanation. The note goes to stderr so a statusbar
+        still receives nothing but the card on stdout."""
+        from bom_clima.cli import main
+
+        stripped = dict(mock_weather_response)
+        stripped["current"] = {"time": None}
+        with (
+            patch("bom_clima.api._get") as mock_get,
+            patch("sys.argv", ["bom-clima", "Sao Paulo", "--line"]),
+        ):
+            mock_get.return_value = MagicMock()
+            mock_get.return_value.json.side_effect = [mock_geo_response, stripped]
+            main()
+        captured = capsys.readouterr()
+        assert "Sao Paulo" in captured.err
+        assert captured.err.count("\n") == 1
+        assert "╭" in captured.out, "esperava o card completo como fallback"
+
+    def test_markup_in_city_name_is_escaped(self, mock_weather_response):
+        """Rich escape turns '[' into '\\['; the name survives, the tag does not."""
+        from bom_clima.formatters import format_line
+
+        line = format_line("A[/bold]B", mock_weather_response, {"unit_system": "metric"})
+        assert line is not None
+        assert "[/bold]" in line
+        assert "\\[" in line
+
+    def test_flag_prints_only_the_line(self, mock_geo_response, mock_weather_response, capsys):
+        from bom_clima.cli import main
+
+        with (
+            patch("bom_clima.api._get") as mock_get,
+            patch("sys.argv", ["bom-clima", "Sao Paulo", "--line"]),
+        ):
+            mock_get.return_value = MagicMock()
+            mock_get.return_value.json.side_effect = [
+                mock_geo_response,
+                mock_weather_response,
+            ]
+            main()
+        out = capsys.readouterr().out
+        assert out.count("\n") == 1
+        assert "╭" not in out and "Horiz" not in out
+        assert out.strip().startswith("Sao Paulo:")
+
+    def test_line_suppresses_the_export_confirmation(self, mock_geo_response, mock_weather_response, capsys):
+        """A pipe must not receive the 'Data exported to:' note."""
+        from bom_clima.cli import main
+
+        with (
+            patch("bom_clima.api._get") as mock_get,
+            patch("sys.argv", ["bom-clima", "Sao Paulo", "--line", "-e", "json", "-o", "-"]),
+        ):
+            mock_get.return_value = MagicMock()
+            mock_get.return_value.json.side_effect = [mock_geo_response, mock_weather_response]
+            main()
+        out = capsys.readouterr().out
+        assert "Data exported to" not in out
+        assert json.loads(out)["city"] == "Sao Paulo"
+
+
+# ---------------------------------------------------------------------------
+# -o - : JSON on stdout, pipeable
+# ---------------------------------------------------------------------------
+
+
+class TestStdoutExport:
+    def test_dash_writes_json_to_stdout(self, mock_weather_response, capsys):
+        from bom_clima.formatters import STDOUT_TARGET, export_all_formats
+
+        written = export_all_formats(mock_weather_response, "Sao Paulo", "json", STDOUT_TARGET)
+        out = capsys.readouterr().out
+        assert written == 1
+        assert json.loads(out)["data"]["current"]["temperature_2m"] == 25.5
+
+    def test_dash_writes_no_ansi_codes(self, mock_weather_response, capsys):
+        """Rich would emit escape codes and break the payload."""
+        from bom_clima.formatters import STDOUT_TARGET, export_all_formats
+
+        export_all_formats(mock_weather_response, "Sao Paulo", "json", STDOUT_TARGET)
+        assert "\x1b[" not in capsys.readouterr().out
+
+    def test_dash_does_not_create_a_file_named_dash(self, mock_weather_response, tmp_path, monkeypatch, capsys):
+        """os.path.splitext('-') would yield '-_Sao_Paulo.json'."""
+        from bom_clima.formatters import STDOUT_TARGET, export_all_formats
+
+        monkeypatch.chdir(tmp_path)
+        export_all_formats(mock_weather_response, "Sao Paulo", "json", STDOUT_TARGET)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_without_dash_still_writes_to_documents(self, mock_weather_response, tmp_path, monkeypatch):
+        """Regression lock: -e without -o must not change where files land."""
+        from bom_clima.formatters import export_all_formats
+
+        docs = tmp_path / "Documents"
+        docs.mkdir()
+        monkeypatch.setattr("bom_clima.formatters._get_documents_dir", lambda: docs)
+        assert export_all_formats(mock_weather_response, "Sao Paulo", "json", None) == 1
+        assert (docs / "Sao_Paulo.json").exists()
+
+    def test_dash_still_rejects_invalid_format(self):
+        from bom_clima.formatters import STDOUT_TARGET, export_all_formats
+
+        assert export_all_formats({"current": {}}, "X", "pdf", STDOUT_TARGET) == 0
+
+    def test_invalid_format_stays_off_stdout(self, mock_weather_response, capsys):
+        """`-e json,pdf -o -` must not hand jq a payload with a message glued
+        to the end of it. The check runs per format, before the stdout branch,
+        so it used to print straight into the pipe."""
+        from bom_clima.formatters import STDOUT_TARGET, export_all_formats
+
+        written = export_all_formats(mock_weather_response, "Sao Paulo", "json,pdf", STDOUT_TARGET)
+        captured = capsys.readouterr()
+        assert written == 1
+        assert json.loads(captured.out)["city"] == "Sao Paulo"
+        assert "pdf" in captured.err
+        assert "pdf" not in captured.out
+
+
+class TestStdoutExportCli:
+    def test_cli_streams_pure_json(self, mock_geo_response, mock_weather_response, capsys):
+        from bom_clima.cli import main
+
+        with (
+            patch("bom_clima.api._get") as mock_get,
+            patch("sys.argv", ["bom-clima", "Sao Paulo", "-e", "json", "-o", "-"]),
+        ):
+            mock_get.return_value = MagicMock()
+            mock_get.return_value.json.side_effect = [mock_geo_response, mock_weather_response]
+            main()
+        out = capsys.readouterr().out
+        # jq has to be able to parse this straight off the pipe.
+        assert json.loads(out)["city"] == "Sao Paulo"
+        assert "╭" not in out
+
+    def test_ambiguity_note_goes_to_stderr(self, mock_weather_response, capsys):
+        """The note would otherwise corrupt the payload the caller is piping."""
+        from bom_clima.cli import main
+
+        multi = {"results": [
+            {"name": "Springfield", "latitude": 39.8, "longitude": -89.6, "admin1": "Illinois"},
+            {"name": "Springfield", "latitude": 37.2, "longitude": -93.3, "admin1": "Missouri"},
+        ]}
+        with (
+            patch("bom_clima.api._get") as mock_get,
+            patch("sys.argv", ["bom-clima", "springfield", "-e", "json", "-o", "-"]),
+        ):
+            mock_get.return_value = MagicMock()
+            mock_get.return_value.json.side_effect = [multi, mock_weather_response]
+            main()
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["city"] == "Springfield"
+        assert "Missouri" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# --help derived from the parser
+# ---------------------------------------------------------------------------
+
+
+class TestHelpOutput:
+    def _help_text(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from bom_clima.cli import show_help
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            show_help(build_parser())
+        return buf.getvalue()
+
+    def test_every_flag_in_the_parser_appears_in_the_help(self):
+        """The regression that motivated deriving it: a new flag used to need
+        two edits, and the hand-written copy had already drifted."""
+        text = self._help_text()
+        parser = build_parser()
+        for action in parser._action_groups:
+            for opt in action._group_actions:
+                for flag in opt.option_strings:
+                    if flag.startswith("--"):
+                        assert flag in text, f"{flag} ausente do --help"
+
+    def test_group_icons_present(self):
+        from bom_clima.cli import _GROUP_ICON_KEYS
+
+        text = self._help_text()
+        for key, icon in _GROUP_ICON_KEYS.items():
+            assert icon in text, f"icone de {key} ausente"
+
+    def test_option_column_is_aligned(self):
+        """Every description must start on the same column."""
+        text = self._help_text()
+        rows = [ln for ln in text.splitlines() if ln.strip().startswith("-")]
+        starts = {len(ln) - len(ln.lstrip()) for ln in rows}
+        assert len(starts) <= 3, "coluna de opcoes desalinhada"
+
+    def test_value_placeholder_follows_the_flag(self):
+        text = self._help_text()
+        assert "-D, --days N" in text
+        assert "-e, --export FMT" in text
+
+    def test_short_flag_is_listed_before_long(self):
+        text = self._help_text()
+        assert "-V, --verbose" in text
+        assert "--verbose, -V" not in text
+
+    def test_export_format_list_is_not_duplicated(self):
+        """The option row used to append '(json, csv, yaml, xml)' to a help
+        string that already named them, printing the list twice."""
+        text = self._help_text()
+        row = [ln for ln in text.splitlines() if "-e, --export" in ln]
+        assert len(row) == 1
+        assert row[0].count("json") == 1
+
+    def test_examples_are_kept(self):
+        text = self._help_text()
+        assert "bom-clima sao paulo" in text
+
+    def test_locale_parity_across_all_three_languages(self):
+        """A key dropped from one file only would silently fall back to English."""
+        import json as json_mod
+        from pathlib import Path
+
+        import bom_clima
+
+        locales = Path(bom_clima.__file__).parent / "locales"
+        sets = {
+            p.name: set(json_mod.loads(p.read_text("utf-8")))
+            for p in sorted(locales.glob("*.json"))
+        }
+        assert len(sets) == 3, f"esperados en/pt/es, achei {list(sets)}"
+        reference = sets["en.json"]
+        for name, keys in sets.items():
+            assert keys == reference, f"{name} diverge de en.json: {keys ^ reference}"
+
+    def test_no_orphan_help_keys_left_behind(self):
+        """The duplicated help_* strings are gone from the locale files."""
+        import json as json_mod
+        from pathlib import Path
+
+        import bom_clima
+
+        locales = Path(bom_clima.__file__).parent / "locales"
+        removed = {
+            "help_search", "help_search_city", "help_search_detect",
+            "help_search_compare", "help_display", "help_display_days",
+            "help_display_hours", "help_display_aqi", "help_display_at",
+            "help_display_rain", "help_display_imperial", "help_display_color",
+            "help_modes", "help_modes_history", "help_export",
+            "help_export_format", "help_export_output", "help_config",
+            "help_config_lang", "help_info", "help_info_help",
+            "help_info_version",
+        }
+        for p in sorted(locales.glob("*.json")):
+            keys = set(json_mod.loads(p.read_text("utf-8")))
+            assert not (keys & removed), f"{p.name} ainda tem chaves removidas"
+
+    def test_every_key_build_parser_asks_for_exists_in_every_locale(self):
+        """`build_parser()` resolves t() at build time, and t() falls back to
+        returning the key itself. So a key dropped from the locale files printed
+        as a bare `help_config_set` in --help -- no exception, no failing test.
+        That happened once; this is the guard.
+
+        The key literals are language-independent, so one build records every key
+        the parser needs and it can be checked against all three files at once.
+        """
+        import json as json_mod
+        from pathlib import Path
+
+        import bom_clima
+        import bom_clima.cli as cli_mod
+
+        asked: list[str] = []
+        real_t = cli_mod.t
+
+        def _spy(key):
+            asked.append(key)
+            return real_t(key)
+
+        locales = Path(bom_clima.__file__).parent / "locales"
+        tables = {
+            p.name: json_mod.loads(p.read_text("utf-8"))
+            for p in sorted(locales.glob("*.json"))
+        }
+        with patch("bom_clima.cli.t", side_effect=_spy):
+            build_parser()
+
+        wanted = set(asked)
+        assert wanted, "nenhuma chave registrada; o spy esta no lugar errado"
+        missing = {name: sorted(wanted - set(table)) for name, table in tables.items()}
+        assert not any(missing.values()), f"chaves ausentes nos locales: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# --line / -o - must not be dropped by the multi-city paths
+# ---------------------------------------------------------------------------
+
+
+class TestMachineOutputEveryPath:
+    """Both flags replace the cards, so every fetch path has to honour them.
+
+    --compare renders through display_comparison() instead of _render_one(),
+    which made it a separate branch that silently ignored --line.
+    """
+
+    @staticmethod
+    def _cities():
+        return [
+            {"name": "Curitiba", "latitude": -25.4, "longitude": -49.3, "admin1": "Parana"},
+            {"name": "Recife", "latitude": -8.05, "longitude": -34.9, "admin1": "Pernambuco"},
+        ]
+
+    def _run(self, argv, weather):
+        from bom_clima.cli import main
+
+        resp = MagicMock()
+        resp.json.side_effect = [
+            {"results": [self._cities()[0]]},
+            weather,
+            {"results": [self._cities()[1]]},
+            weather,
+        ]
+        with (
+            patch("bom_clima.api._get", return_value=resp),
+            patch("sys.argv", argv),
+        ):
+            main()
+
+    def test_line_with_compare_prints_one_line_per_city(self, capsys, mock_weather_response):
+        self._run(["bom-clima", "curitiba,recife", "--compare", "--line"], mock_weather_response)
+        out = capsys.readouterr().out.strip().splitlines()
+        assert len(out) == 2
+        assert out[0].startswith("Curitiba:")
+        assert out[1].startswith("Recife:")
+
+    def test_line_with_multi_city_prints_one_line_per_city(self, capsys, mock_weather_response):
+        self._run(["bom-clima", "curitiba,recife", "--line"], mock_weather_response)
+        out = capsys.readouterr().out.strip().splitlines()
+        assert len(out) == 2
+        assert "╭" not in capsys.readouterr().out
+
+    def test_compare_still_renders_cards_without_the_flag(self, capsys, mock_weather_response):
+        self._run(["bom-clima", "curitiba,recife", "--compare"], mock_weather_response)
+        assert "╭" in capsys.readouterr().out

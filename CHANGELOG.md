@@ -1,3 +1,97 @@
+# Changelog
+
+All notable changes to Bom Clima will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.4.1] - 2026-10-10
+
+### Fixed
+- `--help` printed the bare translation keys `help_config_set` and
+  `help_config_show` in the CONFIGURATION group: both keys had been deleted
+  from the locale files while `build_parser()` still asked for them, and `t()`
+  falls back to returning the key itself rather than raising.
+- An invalid `--export` format no longer writes its error to stdout on the
+  `-o -` path. `bom-clima sp -e json,pdf -o - | jq` produced a valid payload
+  followed by "Invalid format: pdf" and left jq with unparseable input; the
+  message now goes to stderr, like every other human-facing note on that path.
+- `--line` no longer prints nothing at all when the payload has no `current`
+  block. It explains itself on stderr and falls back to the full card.
+- A degraded `current` block no longer crashes the card. Open-Meteo can answer
+  HTTP 200 with `current` absent, empty or `null`, and its cells are
+  individually nullable; `format_weather_block()` raised `KeyError`,
+  `TypeError` or `AttributeError` on every one of those. Rows without a reading
+  are now omitted instead of defaulting, and — importantly — the WMO
+  description, the rain figure and the min/max bar marker are omitted rather
+  than falling back to 0, which would have claimed "Clear sky" and "no rain"
+  for a city with no observation at all. The hourly table cuts at wall-clock
+  time when the payload carries no reference instant.
+- A degraded `daily` block no longer crashes the card either. `daily` absent,
+  empty, `null` or short of a series raised `KeyError`/`AttributeError` on the
+  direct `diario[...][idx]` reads; those rows are now omitted via `_at()`, and
+  the min/max rows and bar marker go with them instead of rendering a
+  fabricated "0.0°C". The forecast/hourly tables skip unparseable timestamps
+  and degrade parallel-array cells to 0 rather than raising, and every
+  `dados.get("daily"/"hourly", {})` became `or {}` so an explicit `null` cannot
+  crash `today_index()` and friends the way it already could not for `current`.
+- `--lang` no longer writes `~/.config/bom-clima/lang`. A one-off
+  `bom-clima sp --lang en` used to persist the choice, and the file it wrote
+  outranked `$LANG`, so the desktop locale stayed overridden for every later
+  run — a `--lang` for a single command silently became permanent. Only an
+  explicit `--config-set lang=` persists now, which is what the flag documents
+  itself as doing.
+- The city-disambiguation note no longer repeats the card: the
+  "Multiple matches… / Other matches…" preamble is gone and only the refine
+  hint remains, on one line, in the user's language.
+
+### Removed
+- `city_ambiguous` and `city_alternatives` translation keys (`en`, `pt`, `es`),
+  along with the alternatives list they formatted.
+
+## [0.4.0] - 2026-10-10
+
+### Added
+- `--line` prints one compact line (`Curitiba: 🌧️ 18.9°C`) instead of the
+  cards, sized for a tmux/i3status bar or a shell prompt. Composes with
+  `--compare`, multi-city queries and `--detect`.
+- `-o -` streams the export to stdout instead of writing a file, following the
+  convention curl/jq/pip use: `bom-clima sao paulo -e json -o - | jq`. Nothing
+  else may reach stdout on that path — the cards are suppressed, and the
+  "Data exported to" confirmation and the city-disambiguation note go to stderr,
+  so `jq` reads the payload and nothing else. `-e` without `-o` still writes to
+  `~/Documents/<city>.<fmt>`.
+
+### Changed
+- `--help` now derives its option list from the argument parser instead of
+  repeating all ~27 options by hand. Adding a flag no longer needs two edits —
+  the hand-written copy had already drifted into a broken column and a mid-word
+  line wrap. The panel, the group icons and the examples are unchanged.
+- City disambiguation notes and the `--detect` location line now go to stderr.
+  They were already on stderr in the first case, but a note on stdout corrupted
+  exactly what `--line` and `-o -` exist to hand to a pipe.
+- The daily forecast ceiling is a single constant, `MAX_FORECAST_DAYS`, instead
+  of `15` spelled out in the CLI, the config sanitiser and the API client — and
+  `16` in the API client, which disagreed with the other three.
+- The tests import at the top of the file like the rest of the module.
+
+### Fixed
+- The `--export` help row printed the format list twice, appending
+  `(json, csv, yaml, xml)` to a translation that already named them.
+- Short flags are listed before long ones in `--help`; argparse preserved the
+  declaration order, which rendered `-V` as `--verbose, -V`.
+- `-o -` with several cities no longer builds a literal `-_Sao_Paulo.json`
+  file: `os.path.splitext("-")` used to run before the stdout target was
+  recognised.
+- `--line` and `-o -` no longer crash on a `null` temperature cell, which
+  Open-Meteo sends for readings it has no sensor for.
+
+### Removed
+- 25 duplicated `help_*` translation keys (`en`, `pt`, `es`) that only the
+  hand-written help copy read. 169 keys per locale became 148.
+
 ## [0.3.1] - 2026-10-10
 
 ### Changed
@@ -93,14 +187,6 @@
 - `--alerts`. It called `https://api.open-meteo.com/v1/warnings`, which returns
   HTTP 404; there is no public severe-weather endpoint in the Open-Meteo API, so
   the flag could never report anything. Extreme weather is still detected locally.
-
-# Changelog
-
-All notable changes to Bom Clima will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
-
-## [Unreleased]
 
 ## [0.2.8] - 2026-08-12
 

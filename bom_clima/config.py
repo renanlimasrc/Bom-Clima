@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from .constants import CONFIG_FILE
+from .constants import CONFIG_FILE, MAX_FORECAST_DAYS
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "unit_system": "metric",
@@ -34,7 +34,7 @@ def _sanitize(cfg: dict[str, Any]) -> dict[str, Any]:
         value = cfg[key]
         if isinstance(value, bool) or not isinstance(value, int):
             cfg[key] = DEFAULT_CONFIG[key]
-    if not 1 <= cfg["forecast_days"] <= 15:
+    if not 1 <= cfg["forecast_days"] <= MAX_FORECAST_DAYS:
         cfg["forecast_days"] = DEFAULT_CONFIG["forecast_days"]
     if cfg["forecast_hours"] < 1:
         cfg["forecast_hours"] = DEFAULT_CONFIG["forecast_hours"]

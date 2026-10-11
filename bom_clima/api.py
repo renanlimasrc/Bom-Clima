@@ -13,11 +13,11 @@ from .constants import (
     BASE_URL_WEATHER,
     HEADERS,
     IP_API_URL,
+    MAX_FORECAST_DAYS,
     TIMEOUT,
 )
 from .i18n import t
 
-MAX_FORECAST_DAYS = 16
 GEO_COUNT = 5
 
 _RETRY_ATTEMPTS = 4
