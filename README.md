@@ -60,7 +60,15 @@ A beautiful, feature-rich command-line weather application powered by Open-Meteo
 #### Arch Linux
 ```bash
 ./scripts/package-arch.sh
-sudo pacman -U bom-clima-*.pkg.tar.zst
+sudo pacman -U dist/bom-clima-*.pkg.tar.zst
+```
+
+The release assets (`bom_clima-*.tar.gz` / `bom_clima-*.whl`) are for **pip**, not for
+pacman — `pacman -U` on the sdist fails with "missing package metadata". To install
+straight from a release instead of building the Arch package:
+
+```bash
+pip install https://github.com/renanlimasrc/Bom-Clima/releases/download/v0.5.0/bom_clima-0.5.0-py3-none-any.whl
 ```
 
 ### From Source

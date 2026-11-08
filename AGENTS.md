@@ -145,6 +145,10 @@ python bom-clima.py sao paulo       # run the app
 4. `rm -rf dist && python -m build` — verify the wheel ships `locales/` and `LICENSE`.
 5. Commit everything, tag `vX.Y.Z`, push the commit and the tag, then
    `gh release create vX.Y.Z dist/*` with the changelog section as notes.
+6. Arch users: on an Arch system run `scripts/package-arch.sh` and upload the
+   resulting `bom-clima-*.pkg.tar.zst` (`gh release upload vX.Y.Z dist/*.pkg.tar.zst`).
+   The sdist/wheel release assets are for pip — `pacman -U` on the sdist fails
+   with "missing package metadata".
 
 ## Code Conventions
 

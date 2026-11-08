@@ -52,3 +52,11 @@ class TestReleaseConsistency:
     def test_requirements_txt_does_not_come_back(self):
         # dependencies live in pyproject.toml only; a second file drifts
         assert not (ROOT / "requirements.txt").exists()
+
+    def test_arch_packaging_script_reads_version_from_init(self):
+        # version lives only in bom_clima/__init__.py; the script used to read
+        # ['project']['version'] from pyproject.toml, which is now dynamic
+        script = (ROOT / "scripts/package-arch.sh").read_text("utf-8")
+        assert "__init__.py" in script
+        assert "['project']['version']" not in script
+        assert "[\"project\"][\"version\"]" not in script

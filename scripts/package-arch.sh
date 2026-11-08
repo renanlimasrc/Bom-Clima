@@ -6,7 +6,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 PKGNAME="bom-clima"
-VERSION="$(/usr/bin/python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+# Single source of truth for the version: bom_clima/__init__.py (pyproject.toml
+# reads it dynamically via [tool.hatch.version]).
+VERSION="$(/usr/bin/python -c "from bom_clima import __version__; print(__version__)")"
 DIST_DIR="$PROJECT_ROOT/dist"
 BUILD_DIR="$PROJECT_ROOT/build/arch"
 
@@ -26,6 +28,8 @@ tar czf "$TARBALL" \
     --exclude='.mypy_cache' \
     --exclude='.pytest_cache' \
     --exclude='.ruff_cache' \
+    --exclude='.opencode' \
+    --exclude='*.egg-info' \
     -C "$(dirname "$PROJECT_ROOT")" "$(basename "$PROJECT_ROOT")"
 
 SHA256="$(sha256sum "$TARBALL" | awk '{print $1}')"
