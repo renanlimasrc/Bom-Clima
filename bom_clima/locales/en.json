@@ -78,6 +78,7 @@
     "help_detect": "Auto-detect location via IP",
     "help_compare": "Compare cities side by side",
     "help_days": "Number of days in forecast",
+    "days_clamped": "--days exceeds the maximum; using {max} days.",
     "help_hours": "Number of hours in hourly forecast",
     "help_aqi": "Include air quality",
     "help_imperial": "Use imperial units (°F, mph, in)",

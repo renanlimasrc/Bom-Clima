@@ -4,9 +4,11 @@ import contextlib
 import json
 import os
 from datetime import datetime
+from typing import cast
 
 from .config import load_config
 from .constants import HISTORY_FILE
+from .types import HistoryEntry
 
 
 def _quarantine() -> None:
@@ -20,7 +22,7 @@ def _quarantine() -> None:
         os.replace(HISTORY_FILE, HISTORY_FILE.with_name(HISTORY_FILE.name + ".corrupt"))
 
 
-def load_history() -> list[dict]:
+def load_history() -> list[HistoryEntry]:
     if not HISTORY_FILE.exists():
         return []
     try:
@@ -37,10 +39,12 @@ def load_history() -> list[dict]:
     if not isinstance(result, list):
         _quarantine()
         return []
-    return [entry for entry in result if isinstance(entry, dict)]
+    # Entries are user-editable, so they may miss keys; HistoryEntry is
+    # total=False to reflect that.
+    return cast(list[HistoryEntry], [e for e in result if isinstance(e, dict)])
 
 
-def save_history(history: list[dict], limit: int = 50) -> None:
+def save_history(history: list[HistoryEntry], limit: int = 50) -> None:
     # limit comes straight from config.json, which the user can hand-edit, so it
     # may arrive as a float, a string or None and break the slice below.
     try:
@@ -56,14 +60,17 @@ def save_history(history: list[dict], limit: int = 50) -> None:
     os.replace(tmp, HISTORY_FILE)
 
 
-def add_history(city: str, lat: float, lon: float) -> None:
-    cfg = load_config()
+def add_history(city: str, lat: float, lon: float, history_limit: int | None = None) -> None:
+    if history_limit is None:
+        # Back-compat: callers that have the config handy pass it explicitly;
+        # everyone else pays one config read.
+        history_limit = load_config().get("history_limit", 50)
     history = load_history()
-    entry = {
+    entry: HistoryEntry = {
         "city": city,
         "lat": lat,
         "lon": lon,
         "when": datetime.now().astimezone().isoformat(),
     }
     history.append(entry)
-    save_history(history, cfg.get("history_limit", 50))
+    save_history(history, history_limit)

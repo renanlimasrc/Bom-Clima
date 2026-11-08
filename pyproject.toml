@@ -1,15 +1,17 @@
 [project]
 name = "bom-clima"
-version = "0.4.1"
+# Single source of truth for the version: bom_clima/__init__.py is read by
+# hatchling at build time, so there is nothing to keep in sync by hand.
+dynamic = ["version"]
 description = "Bom Clima — beautiful CLI weather app using the Open-Meteo API"
 requires-python = ">=3.10"
 license = "GPL-2.0-or-later"
+license-files = ["LICENSE"]
 readme = "README.md"
 authors = [
     {name = "ninrod"},
 ]
 classifiers = [
-    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Operating System :: OS Independent",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS",
@@ -31,6 +33,8 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
     "types-requests>=2.28.0",
+    "pyyaml>=6.0",
+    "build>=1.0",
 ]
 
 [project.scripts]
@@ -53,5 +57,9 @@ disallow_untyped_defs = true
 testpaths = ["tests"]
 
 [build-system]
-requires = ["hatchling"]
+# PEP 639 (license-files) needs hatchling >= 1.27.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "bom_clima/__init__.py"

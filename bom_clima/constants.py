@@ -92,6 +92,9 @@ def ensure_app_dir() -> None:
 
 CACHE_TTL_GEO = 86400 * 7
 CACHE_TTL_WEATHER = 1800
+# IP geolocation via --detect: the user's address changes rarely enough that a
+# 10-minute window is plenty, and a fresh city beats a week-old cached one.
+CACHE_TTL_IP = 600
 
 # Upper bound on the daily forecast. It used to be spelled out in four places
 # (the API client even said 16), so the CLI, the config sanitiser and the

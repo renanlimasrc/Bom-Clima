@@ -3,7 +3,7 @@
 A beautiful, feature-rich command-line weather application powered by Open-Meteo API. Get weather forecasts, air quality, moon phases, and more — all from your terminal.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Version](https://img.shields.io/badge/Version-0.4.1-blue.svg)
+![Version](https://img.shields.io/github/v/release/renanlimasrc/Bom-Clima)
 ![License](https://img.shields.io/badge/License-GPL%202.0-blue.svg)
 
 ## ✨ Features
@@ -75,8 +75,23 @@ bom-clima --help
 ```bash
 git clone https://github.com/renanlimasrc/Bom-Clima.git
 cd Bom-Clima
-pip install -e .
+pip install -e ".[dev]"
 bom-clima --help
+```
+
+### Shell completions
+Static completion scripts for bash, zsh and fish live in [`completions/`](completions/):
+
+```bash
+# bash — once per session, or copy to your bash-completion.d directory
+source completions/bom-clima.bash
+
+# zsh — copy to a directory in your $fpath, then compinit
+cp completions/_bom-clima ~/.zfunc/_bom-clima
+autoload -Uz compinit && compinit
+
+# fish
+cp completions/bom-clima.fish ~/.config/fish/completions/bom-clima.fish
 ```
 
 ## 📖 Usage
@@ -314,11 +329,12 @@ São Paulo: 🌤️ 20.3°C
 
 ```bash
 cd Bom-Clima
-python -m pytest tests/test_bom_clima.py -v
+python -m pytest tests/ -v
 ```
 
-259 tests, covering the formatters, the cache, the CLI parser, every pairwise
-argument combination and the regression for each fix in the
+300+ tests across per-module test files (`tests/test_cli.py`,
+`tests/test_api.py`, …), covering the formatters, the cache, the CLI parser,
+every pairwise argument combination and the regression for each fix in the
 [changelog](CHANGELOG.md). The same run must be clean under
 `ruff check bom_clima/ tests/` and `mypy bom_clima/`.
 

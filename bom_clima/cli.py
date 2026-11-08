@@ -4,7 +4,8 @@ import argparse
 import contextlib
 import os
 import sys
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 
 from . import __version__
 from .api import detect_location, fetch_weather_data, search_cities
@@ -32,6 +33,7 @@ from .formatters import (
 )
 from .history import add_history, load_history
 from .i18n import set_lang, t
+from .types import CityCandidate
 
 _INT_CONFIG_KEYS = ("forecast_days", "forecast_hours", "history_limit")
 
@@ -324,6 +326,9 @@ def apply_config_overrides(cfg: dict[str, Any], args: argparse.Namespace) -> dic
     if args.hours is not None:
         cfg["forecast_hours"] = args.hours
     if args.days is not None:
+        if args.days > MAX_FORECAST_DAYS:
+            # Silence here used to make `--days 30` print 15 days with no hint.
+            print(t("days_clamped").format(max=MAX_FORECAST_DAYS), file=sys.stderr)
         cfg["forecast_days"] = min(args.days, MAX_FORECAST_DAYS)
     if args.no_color:
         cfg["color"] = False
@@ -436,13 +441,14 @@ def _render_one(
     land in the middle of what the caller asked to pipe, so it is skipped.
     """
     machine_output = getattr(args, "line", False) or args.output == STDOUT_TARGET
+    history_limit = cfg.get("history_limit", 50)
 
     if machine_output:
         if args.export:
             _do_export(dados, nome, args.export, args.output, per_city=per_city_export)
         else:
             _print_line_or_card(nome, dados, cfg, cidade_info, at_hour)
-        add_history(history_city, cidade_info["latitude"], cidade_info["longitude"])
+        add_history(history_city, cidade_info["latitude"], cidade_info["longitude"], history_limit=history_limit)
         return
 
     display_weather(nome, dados, cfg, city_info=cidade_info, at_hour=at_hour)
@@ -450,7 +456,7 @@ def _render_one(
     _show_rain(dados, cfg, args)
     if args.vs_yesterday:
         _show_vs_yesterday(dados, unit_system=cfg.get("unit_system", "metric"))
-    add_history(history_city, cidade_info["latitude"], cidade_info["longitude"])
+    add_history(history_city, cidade_info["latitude"], cidade_info["longitude"], history_limit=history_limit)
     if args.export:
         _do_export(dados, nome, args.export, args.output, per_city=per_city_export)
 
@@ -523,7 +529,7 @@ def _parse_at(raw: str | None) -> tuple[int, int] | None:
     return hour, minute
 
 
-def _refine_hint(city: str, candidates: list[dict]) -> str:
+def _refine_hint(city: str, candidates: list[CityCandidate]) -> str:
     """The one-line hint shown for an ambiguous query.
 
     Only the tip survives: naming the chosen city and listing the alternatives
@@ -537,7 +543,7 @@ def _refine_hint(city: str, candidates: list[dict]) -> str:
     return t("city_refine_hint").format(example=f"{city.strip()}, {admin1}")
 
 
-def _resolve_city(city: str, no_cache: bool) -> dict:
+def _resolve_city(city: str, no_cache: bool) -> CityCandidate:
     """Geocode, always taking the first (most populous) candidate.
 
     When the query is ambiguous a hint goes to stderr showing how to refine
@@ -576,7 +582,36 @@ def _fetch_and_display(
         verbose=args.verbose,
     )
     nome = cidade_info.get("name", city)
-    return nome, dados, cidade_info
+    # The display/export layer works on plain dicts; only the fetch boundary is
+    # typed, so the payload widens here rather than through every formatter.
+    return nome, cast(dict, dados), cast(dict, cidade_info)
+
+
+def _fetch_cities(
+    cities: list[str],
+    cfg: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[tuple[str, dict, dict] | ValueError]:
+    """Fetch every city concurrently, in input order.
+
+    Failures come back as ValueError entries instead of raising, so one bad
+    city doesn't sink the rest — the compare path reports the failures and
+    renders the good ones, and the multi-city path keeps its
+    exit-on-first-failure behaviour. Network calls dominate the runtime, so a
+    thread pool is enough; there is nothing CPU-bound here.
+    """
+    if not cities:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(cities))) as pool:
+        futures = [pool.submit(_fetch_and_display, city, cfg, args) for city in cities]
+        outcomes: list[tuple[str, dict, dict] | ValueError] = []
+        # Iterate the list, not as_completed: order stays the command-line order.
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except ValueError as exc:
+                outcomes.append(exc)
+    return outcomes
 
 
 def _resolve_lang(cfg: dict[str, Any], argv: list[str] | None = None) -> None:
@@ -666,7 +701,7 @@ def main() -> None:
     city_arg_provided = bool(args.city)
 
     if args.detect:
-        loc = detect_location()
+        loc = detect_location(no_cache=args.no_cache)
         if loc:
             city_name = loc.get("city", t("detect_label"))
             if loc.get("country"):
@@ -683,7 +718,7 @@ def main() -> None:
                 print(f"\U0001f4cd {t('detect_label')}: {city_name} (lat: {loc['lat']}, lon: {loc['lon']})")
             past_days = 1 if getattr(args, "vs_yesterday", False) else 0
             try:
-                dados = fetch_weather_data(
+                dados = cast(dict, fetch_weather_data(
                     loc["lat"], loc["lon"],
                     unit_system=cfg.get("unit_system", "metric"),
                     include_aqi=args.aqi,
@@ -691,7 +726,7 @@ def main() -> None:
                     past_days=past_days,
                     no_cache=args.no_cache,
                     verbose=args.verbose,
-                )
+                ))
             except ValueError as e:
                 print(f"\n{e}\n")
                 sys.exit(1)
@@ -740,13 +775,14 @@ def main() -> None:
         machine_output = getattr(args, "line", False) or args.output == STDOUT_TARGET
         resultados: list[tuple[str, dict, dict[str, Any], dict | None]] = []
         falhas: list[str] = []
-        for city in cities:
-            try:
-                nome, dados, cidade_info = _fetch_and_display(city, cfg, args)
-                resultados.append((nome, dados, cfg, cidade_info))
-                add_history(city, cidade_info["latitude"], cidade_info["longitude"])
-            except ValueError as e:
-                falhas.append(f"{city}: {e}")
+        for city, outcome in zip(cities, _fetch_cities(cities, cfg, args), strict=True):
+            if isinstance(outcome, ValueError):
+                falhas.append(f"{city}: {outcome}")
+                continue
+            nome, dados, cidade_info = outcome
+            resultados.append((nome, dados, cfg, cidade_info))
+            add_history(city, cidade_info["latitude"], cidade_info["longitude"],
+                        history_limit=cfg.get("history_limit", 50))
         if not resultados:
             print("\n".join(falhas))
             sys.exit(1)
@@ -781,11 +817,10 @@ def main() -> None:
         _render_one(nome, dados, cidade_info, cfg, args, at_hour,
                     cities[0], per_city_export=False)
     else:
-        for city in cities:
-            try:
-                nome, dados, cidade_info = _fetch_and_display(city, cfg, args)
-            except ValueError as e:
-                print(f"\n{e}\n")
+        for city, outcome in zip(cities, _fetch_cities(cities, cfg, args), strict=True):
+            if isinstance(outcome, ValueError):
+                print(f"\n{outcome}\n")
                 sys.exit(1)
+            nome, dados, cidade_info = outcome
             _render_one(nome, dados, cidade_info, cfg, args, at_hour,
                         city, per_city_export=True)

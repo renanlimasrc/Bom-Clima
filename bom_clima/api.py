@@ -1,12 +1,20 @@
 """API client for Open-Meteo and IP location."""
 
 import json
+import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 import requests
 
-from .cache import cache_get_geo, cache_get_weather, cache_set_geo, cache_set_weather
+from .cache import (
+    cache_get_geo,
+    cache_get_ip,
+    cache_get_weather,
+    cache_set_geo,
+    cache_set_ip,
+    cache_set_weather,
+)
 from .constants import (
     BASE_URL_AIR,
     BASE_URL_GEO,
@@ -17,8 +25,20 @@ from .constants import (
     TIMEOUT,
 )
 from .i18n import t
+from .types import CityCandidate, DetectedLocation, WeatherResponse
 
 GEO_COUNT = 5
+
+def _debug(verbose: bool, message: str) -> None:
+    """--verbose diagnostics on stderr.
+
+    stdout belongs to the forecast (or to --line / -o -), so the debug trace
+    must not land there; a statusline capturing the output would otherwise
+    print "[debug] ..." lines.
+    """
+    if verbose:
+        print(f"[debug] {message}", file=sys.stderr)
+
 
 _RETRY_ATTEMPTS = 4
 _RETRY_BACKOFF = 0.5
@@ -50,12 +70,16 @@ def _get(url: str, params: dict[str, Any] | None = None) -> requests.Response:
     raise last_exc
 
 
-def detect_location() -> dict | None:
+def detect_location(no_cache: bool = False) -> DetectedLocation | None:
+    if not no_cache:
+        cached = cache_get_ip()
+        if cached is not None:
+            return cast(DetectedLocation, cached)
     try:
         res = _get(IP_API_URL)
         data = res.json()
         if "latitude" in data and "longitude" in data:
-            return {
+            location: DetectedLocation = {
                 "lat": data["latitude"],
                 "lon": data["longitude"],
                 # ipapi.co sends an explicit null for VPN, proxy and carrier
@@ -64,12 +88,15 @@ def detect_location() -> dict | None:
                 "city": data.get("city") or "",
                 "country": data.get("country_name") or data.get("country") or "",
             }
+            if not no_cache:
+                cache_set_ip(dict(location))
+            return location
     except (requests.RequestException, json.JSONDecodeError):
         pass
     return None
 
 
-def search_cities(nome: str, no_cache: bool = False) -> list[dict]:
+def search_cities(nome: str, no_cache: bool = False) -> list[CityCandidate]:
     """Geocode a query, returning every candidate the API found.
 
     Results are cached as a {"results": [...]} wrapper, so picking a different
@@ -90,12 +117,15 @@ def search_cities(nome: str, no_cache: bool = False) -> list[dict]:
         cached = cache_get_geo(cache_key)
         if isinstance(cached, dict):
             if isinstance(cached.get("results"), list):
-                results = [r for r in cached["results"] if isinstance(r, dict)]
+                results = cast(
+                    list[CityCandidate],
+                    [r for r in cached["results"] if isinstance(r, dict)],
+                )
                 if results:
                     return results[:GEO_COUNT]
             elif "name" in cached:
                 # Entries cached by older versions hold a single result dict.
-                return [cached]
+                return [cast(CityCandidate, cached)]
     params: dict[str, str | int] = {"name": city_name, "count": GEO_COUNT, "language": lang, "format": "json"}
     try:
         res = _get(BASE_URL_GEO, params=params)
@@ -109,7 +139,10 @@ def search_cities(nome: str, no_cache: bool = False) -> list[dict]:
     # API answers {"results": null} rather than [] for some queries.
     if not isinstance(data, dict):
         raise ValueError(t("city_not_found").format(name=city_name))
-    results = [r for r in (data.get("results") or []) if isinstance(r, dict)][:GEO_COUNT]
+    results = cast(
+        list[CityCandidate],
+        [r for r in (data.get("results") or []) if isinstance(r, dict)][:GEO_COUNT],
+    )
     if not results:
         raise ValueError(t("city_not_found").format(name=city_name))
     if not no_cache:
@@ -117,7 +150,7 @@ def search_cities(nome: str, no_cache: bool = False) -> list[dict]:
     return results
 
 
-def search_city(nome: str, no_cache: bool = False) -> dict:
+def search_city(nome: str, no_cache: bool = False) -> CityCandidate:
     """Geocode a query, returning the best candidate.
 
     Kept for callers that don't need disambiguation; search_cities() raises
@@ -135,7 +168,7 @@ def fetch_weather_data(
     past_days: int = 0,
     no_cache: bool = False,
     verbose: bool = False,
-) -> dict:
+) -> WeatherResponse:
     # Clamp here as well as in the CLI: this is a public entry point and
     # forecast_days=0 comes back as HTTP 200 with an empty "daily" array.
     forecast_days = max(1, min(int(forecast_days), MAX_FORECAST_DAYS))
@@ -144,9 +177,8 @@ def fetch_weather_data(
     if not no_cache:
         cached = cache_get_weather(cache_key)
         if cached:
-            if verbose:
-                print(f"[debug] cache hit for {cache_key}")
-            return cached
+            _debug(verbose, f"cache hit for {cache_key}")
+            return cast(WeatherResponse, cached)
 
     params: dict[str, Any] = {
         "latitude": lat,
@@ -178,10 +210,9 @@ def fetch_weather_data(
         params["precipitation_unit"] = "inch"
 
     try:
-        if verbose:
-            print(f"[debug] fetching weather for {lat},{lon}")
+        _debug(verbose, f"fetching weather for {lat},{lon}")
         res = _get(BASE_URL_WEATHER, params=params)
-        result: dict = res.json()
+        result: WeatherResponse = res.json()
     except requests.RequestException as exc:
         raise ValueError(t("weather_error")) from exc
 
@@ -206,8 +237,7 @@ def fetch_weather_data(
             air_res = _get(BASE_URL_AIR, params=air_params)
             result["air_quality"] = air_res.json().get("current", {})
         except requests.RequestException as exc:
-            if verbose:
-                print(f"[debug] AQI fetch failed: {exc}")
+            _debug(verbose, f"AQI fetch failed: {exc}")
             result["air_quality"] = {}
             complete = False
 
@@ -216,7 +246,7 @@ def fetch_weather_data(
         # outage, not a result. Storing it would make --aqi report "N/A" for
         # the next 30 minutes even once the network recovered.
         if complete:
-            cache_set_weather(cache_key, result)
-        elif verbose:
-            print(f"[debug] not caching {cache_key}: incomplete response")
+            cache_set_weather(cache_key, cast(dict[str, Any], result))
+        else:
+            _debug(verbose, f"not caching {cache_key}: incomplete response")
     return result

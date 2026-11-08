@@ -1,0 +1,36 @@
+#compdef bom-clima
+# zsh completion for bom-clima — install:
+#   copy this file to a directory in your $fpath (e.g. ~/.zfunc/_bom-clima)
+#   then run: autoload -Uz compinit && compinit
+#
+# Kept next to build_parser(): tests/test_completions.py fails when a flag is
+# added to the parser but not to this file.
+
+_bom_clima() {
+    _arguments \
+        '(-d --detect)'{-d,--detect}'[Auto-detect location via IP]' \
+        '(-c --compare)'{-c,--compare}'[Compare cities side by side]' \
+        '(-D --days)'{-D,--days}'[Days of forecast to show]:days:(1 3 5 7 10 15)' \
+        '(-H --hours)'{-H,--hours}'[Hours of forecast to show]:hours:(6 12 24)' \
+        '(-q --aqi)'{-q,--aqi}'[Include air quality]' \
+        '--at[Specific time of day]:time:HH[:MM]' \
+        '--rain[Show the next 24h rain windows]' \
+        '--line[One-line output for tmux/i3status/prompts]' \
+        '(-i --imperial)'{-i,--imperial}'[Imperial units (°F, mph, in)]' \
+        '(-n --no-color)'{-n,--no-color}'[Disable colored output]' \
+        '(-y --history)'{-y,--history}'[Show query history]' \
+        '--no-cache[Bypass cache]' \
+        '(--verbose -V)'{--verbose,-V}'[Show debug information]' \
+        '--best-day[Best day for outdoor activities]' \
+        '--vs-yesterday[Compare with yesterday]' \
+        '(-e --export)'{-e,--export}'[Export data]:format:(json csv yaml xml)' \
+        '(--output -o)'{--output,-o}'[Output file (- streams to stdout)]:file:_files' \
+        '(-l --lang)'{-l,--lang}'[Interface language]:lang:(pt en es)' \
+        '(-s --config-set)'{-s,--config-set}'[Persist a config value KEY=VALUE]:key=value:' \
+        '(-S --config-show)'{-S,--config-show}'[Show persistent configuration]' \
+        '(--help -h)'{--help,-h}'[Show help]' \
+        '(--version -v)'{--version,-v}'[Show version]' \
+        '*:city:'
+}
+
+_bom_clima "$@"

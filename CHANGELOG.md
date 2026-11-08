@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
+### Added
+- Multi-city and `--compare` fetch their cities **in parallel**
+  (`ThreadPoolExecutor`, up to 8 workers). Output order, per-city failure
+  handling and history order are unchanged, but wall-clock time now tracks
+  the slowest city instead of the sum.
+- `--detect` caches the IP geolocation for 10 minutes (`ip_cache` table) and
+  performs no HTTP request on a warm cache. `--no-cache` bypasses it.
+- Shell completions for bash (`completions/bom-clima.bash`), zsh
+  (`completions/_bom-clima`) and fish (`completions/bom-clima.fish`), with a
+  test that fails when a flag is added to the parser but not to the scripts.
+- `--days` above the maximum is no longer silently clamped: a warning is
+  printed to stderr (new `days_clamped` key in en/pt/es).
+- New TypedDicts in `bom_clima/types.py` annotate the Open-Meteo boundary
+  (`CityCandidate`, `WeatherResponse`, `DetectedLocation`, `HistoryEntry`).
+- New tests: referenced `t("…")` keys must exist in all three locales, YAML and
+  XML round-trips parse, IP cache hit/expiry/corruption/no-cache, cache cleanup
+  once per process, clamp warning, completion anti-drift. The suite moved from
+  one 2800-line file to one file per module (`tests/test_*.py` + `conftest.py`).
+
+### Changed
+- `--verbose` diagnostics go to **stderr** instead of stdout, so
+  `bom-clima --line --verbose …` no longer corrupts a piped statusline or
+  `-o -` export.
+- Version is single-sourced in `bom_clima/__init__.py` (`__version__`); the
+  build reads it via `[tool.hatch.version]`. README's badge reads the GitHub
+  release instead of a hardcoded number.
+- Packaging metadata follows PEP 639: `license = "GPL-2.0-or-later"` and
+  `license-files = ["LICENSE"]`; the stale GPLv2 classifier is gone.
+- Cache schema creation and `cache_cleanup()` now run once per process per
+  cache path (module-level flags, thread-safe), instead of on every
+  connection/invocation. `cache_cleanup()` also sweeps `ip_cache`.
+- `add_history()` accepts `history_limit` directly; callers pass the value
+  from the already-loaded config instead of re-reading and re-sanitizing
+  `config.json` on every city.
+- `AGENTS.md` rewritten to describe the current codebase; `requirements.txt`
+  removed (dependencies live in `pyproject.toml`).
+
+### Removed
+- `requirements.txt` (duplicated `pyproject.toml`, drifted by hand). Use
+  `pip install -e ".[dev]"` for development installs.
+
 ## [0.4.1] - 2026-10-10
 
 ### Fixed
